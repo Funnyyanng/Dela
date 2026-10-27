@@ -38,7 +38,13 @@ import { registerSettingsIpc } from '../src/main/settings/ipc';
 import { registerRemoteIpc } from '../src/main/remotes/ipc';
 import { registerNotificationsIpc } from '../src/main/notifications';
 import { registerUpdateIpc } from '../src/main/update';
-import { listLlmProviders, setLlmModel, verifyLlm } from '../src/main/agent/providers';
+import {
+  listLlmProviders,
+  saveLlmProvider,
+  setActiveLlmProvider,
+  setLlmModel,
+  verifyLlm,
+} from '../src/main/agent/providers';
 
 const profile = mkdtempSync(join(tmpdir(), 'dela-workspace-test-'));
 app.setPath('userData', profile);
@@ -378,8 +384,12 @@ app
       () => {},
       () => {},
     );
-    // 只接 llm:* 三个通道：完整的 registerAgentIpc 会预载 Pi 运行时，超出本冒烟范围。
+    // 只接本冒烟使用的 llm:* 通道：完整的 registerAgentIpc 会预载 Pi 运行时。
     ipcMain.handle('llm:list', () => listLlmProviders());
+    ipcMain.handle('llm:save', (_event, input: Parameters<typeof saveLlmProvider>[0]) =>
+      saveLlmProvider(input),
+    );
+    ipcMain.handle('llm:set-active', (_event, id: string) => setActiveLlmProvider(id));
     ipcMain.handle('llm:set-model', (_event, model: string) => setLlmModel(model));
     ipcMain.handle('llm:verify', (_event, input: Parameters<typeof verifyLlm>[0]) =>
       verifyLlm(input),

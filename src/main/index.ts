@@ -47,6 +47,16 @@ import { registerUpdateIpc, startBackgroundUpdateCheck } from './update';
 import Database from 'better-sqlite3';
 import { spawn as spawnPty } from 'node-pty';
 
+const terminalSmokeTest = process.argv.includes('--terminal-smoke-test');
+const smokeTest = process.argv.includes('--smoke-test') || terminalSmokeTest;
+let startHidden = process.argv.includes('--hidden');
+if (smokeTest && !terminalSmokeTest) {
+  const profile = mkdtempSync(join(tmpdir(), 'dela-smoke-'));
+  app.setPath('userData', profile);
+  app.setPath('documents', profile);
+  app.setPath('home', profile);
+}
+
 // 在数据库、窗口和托盘初始化前抢占锁，重复启动只唤起已有实例。
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -85,15 +95,6 @@ ipcMain.handle('window:get-state', (event) => ({
   maximized: BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false,
 }));
 
-const terminalSmokeTest = process.argv.includes('--terminal-smoke-test');
-const smokeTest = process.argv.includes('--smoke-test') || terminalSmokeTest;
-let startHidden = process.argv.includes('--hidden');
-if (smokeTest && !terminalSmokeTest) {
-  const profile = mkdtempSync(join(tmpdir(), 'dela-smoke-'));
-  app.setPath('userData', profile);
-  app.setPath('documents', profile);
-  app.setPath('home', profile);
-}
 // 水源通知每分钟更新；IMAP 沿用现有增量同步，每五分钟检查一次。
 const NOTIFICATION_REFRESH_MS = 60_000;
 const MAIL_REFRESH_MS = 5 * 60_000;
