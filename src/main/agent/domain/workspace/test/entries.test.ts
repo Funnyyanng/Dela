@@ -5,16 +5,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../../../workspace/api', () => ({
   createWorkspaceEntry: vi.fn(),
   getWorkspaceState: vi.fn(),
+  entry: vi.fn(),
+  remoteProjectOf: vi.fn(),
   updateWorkspaceEntry: vi.fn(),
   removeWorkspaceEntry: vi.fn(),
+}));
+vi.mock('../../../../workspace/local-tree', () => ({
+  getLocalWorkspaceState: vi.fn(),
+  listLocalDirectory: vi.fn(),
 }));
 
 import {
   createWorkspaceEntry,
+  entry,
   getWorkspaceState,
+  remoteProjectOf,
   removeWorkspaceEntry,
   updateWorkspaceEntry,
 } from '../../../../workspace/api';
+import { getLocalWorkspaceState, listLocalDirectory } from '../../../../workspace/local-tree';
 import { workspaceArchiveId } from '../../../../../shared/workspace';
 import { createEntryTool, removeEntryTool, updateEntryTool } from '../entries';
 import { linkCanvasSourceTool } from '../link-canvas-source';
@@ -86,18 +95,13 @@ describe('update_entry', () => {
       fromPath: 'D:/ws/课题',
       toPath: 'D:/ws/毕业设计',
     });
-    vi.mocked(getWorkspaceState).mockReturnValue({
-      entries: [
-        {
-          id,
-          parentId: null,
-          name: 'A',
-          kind: 'project',
-          sourceId: null,
-          updatedAt: '2026-01-01T00:00:00Z',
-        },
-      ],
-      directory: 'D:/ws',
+    vi.mocked(entry).mockReturnValue({
+      id,
+      parentId: null,
+      name: 'A',
+      kind: 'project',
+      sourceId: null,
+      updatedAt: '2026-01-01T00:00:00Z',
     });
     await expect(
       updateEntryTool.execute({ id: 'D:/ws/课题', kind: 'project' }),
@@ -108,37 +112,91 @@ describe('update_entry', () => {
       entry: { id, kind: 'project' },
     });
     expect(updateWorkspaceEntry).toHaveBeenCalledWith('D:/ws/课题', { kind: 'project' });
+    expect(entry).toHaveBeenCalledWith(id);
+    expect(getWorkspaceState).not.toHaveBeenCalled();
   });
 });
 
 describe('list_workspace_entries', () => {
   it('空 query 即浏览，parentId 限定直接子条目，结果带 ref 与分页', async () => {
-    vi.mocked(getWorkspaceState).mockReturnValue({
-      entries: [
-        {
-          id,
-          parentId: null,
-          name: '项目A',
-          kind: 'project',
-          sourceId: null,
-          updatedAt: '2026-01-01T00:00:00Z',
-        },
-        {
-          id: childId,
-          parentId: id,
-          name: '笔记B',
-          kind: 'file',
-          sourceId: null,
-          updatedAt: '2026-01-01T00:00:00Z',
-        },
-      ],
-      directory: 'D:/ws',
-    });
+    vi.mocked(listLocalDirectory).mockResolvedValue([
+      {
+        id: childId,
+        parentId: id,
+        name: '笔记B',
+        kind: 'file',
+        sourceId: null,
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
     await expect(listWorkspaceEntriesTool.execute({ parentId: id })).resolves.toEqual({
       items: [expect.objectContaining({ name: '笔记B', ref: { type: 'workspace', id: childId } })],
       total: 1,
       nextOffset: null,
     });
+    expect(listLocalDirectory).toHaveBeenCalledWith(id);
+    expect(getWorkspaceState).not.toHaveBeenCalled();
+    expect(getLocalWorkspaceState).not.toHaveBeenCalled();
+  });
+
+  it('根目录浏览保留外部与远端项目，不列后代，过滤后分页', async () => {
+    vi.mocked(getLocalWorkspaceState).mockResolvedValue({
+      directory: 'D:/ws',
+      entries: [
+        { id, parentId: null, name: '项目A', kind: 'project', sourceId: null, updatedAt: '' },
+        {
+          id: childId,
+          parentId: id,
+          name: '项目内笔记',
+          kind: 'file',
+          sourceId: null,
+          updatedAt: '',
+        },
+        {
+          id: 'external',
+          parentId: null,
+          name: '外部项目',
+          kind: 'project',
+          sourceId: null,
+          updatedAt: '',
+        },
+        {
+          id: 'remote',
+          parentId: null,
+          name: '远端项目',
+          kind: 'project',
+          sourceId: null,
+          remoteId: id,
+          updatedAt: '',
+        },
+      ],
+    });
+    await expect(
+      listWorkspaceEntriesTool.execute({ parentId: null, query: '项目', offset: 1, limit: 1 }),
+    ).resolves.toMatchObject({
+      items: [{ id: 'external', ref: { type: 'workspace', id: 'external' } }],
+      total: 3,
+      nextOffset: 2,
+    });
+    expect(getWorkspaceState).not.toHaveBeenCalled();
+    expect(listLocalDirectory).not.toHaveBeenCalled();
+  });
+
+  it('未限定父目录时保留全局查找，远端目录不误读本机路径', async () => {
+    vi.mocked(getWorkspaceState).mockReturnValue({ directory: 'D:/ws', entries: [] });
+    await expect(listWorkspaceEntriesTool.execute({ query: '笔记' })).resolves.toEqual({
+      items: [],
+      total: 0,
+      nextOffset: null,
+    });
+    expect(getWorkspaceState).toHaveBeenCalledOnce();
+    vi.mocked(remoteProjectOf).mockReturnValue({ id, path: '/srv/project', remoteId: id });
+    await expect(listWorkspaceEntriesTool.execute({ parentId: id })).resolves.toEqual({
+      items: [],
+      total: 0,
+      nextOffset: null,
+    });
+    expect(listLocalDirectory).not.toHaveBeenCalled();
   });
 });
 

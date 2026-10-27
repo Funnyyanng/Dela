@@ -71,7 +71,10 @@ function handle(message: JsonRpcRequest) {
         jsonrpc: '2.0',
         id: message.id,
         result: {
-          content: [{ type: 'text', text: `echo:${args.message ?? ''}` }],
+          content:
+            process.env.DELA_STRUCTURED_ONLY === '1'
+              ? []
+              : [{ type: 'text', text: `echo:${args.message ?? ''}` }],
           structuredContent: { echoed: true },
         },
       });

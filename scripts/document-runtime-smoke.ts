@@ -96,6 +96,12 @@ Image.new('RGB',(100,100),'navy').save(root/'sample.pdf')
       await assert.rejects(readFile(job.input), { code: 'ENOENT' });
       console.log(`${extension}: prepare → shared Python reader → release passed`);
     }
+    const readerTests = await exec(
+      documentPython(),
+      ['-I', join(process.cwd(), 'src/main/documents/test/reader_test.py'), '-v'],
+      options,
+    );
+    console.log(readerTests.stdout || readerTests.stderr);
     console.log(
       'Document runtime smoke passed: official install, skill enable, DOCX/XLSX/PPTX/PDF, system PATH, cleanup.',
     );

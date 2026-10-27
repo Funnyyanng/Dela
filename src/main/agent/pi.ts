@@ -4,7 +4,14 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { AgentSession, PackageSource, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import type { StoredLlmProvider } from '../credentials';
-import { llmModelSettings, LLM_DEFAULT_CONTEXT_WINDOW } from '../../shared/llm-presets';
+import {
+  llmModelSettings,
+  LLM_DEFAULT_CONTEXT_WINDOW,
+  LLM_DEFAULT_OUTPUT_TOKENS,
+} from '../../shared/llm-presets';
+import { kimiCacheOptions } from './kimi-cache';
+import { taskStepTool } from './task-step';
+import { shutdownSession } from './session-lifecycle';
 
 type Sdk = typeof import('@earendil-works/pi-coding-agent');
 
@@ -38,12 +45,15 @@ function thinkingLevel(effort: string | undefined) {
 /** 把当前提供商注册成 Pi 的 OpenAI 兼容提供商。 */
 async function resolveModel(provider: StoredLlmProvider, modelId = provider.model) {
   const runtime = await modelRuntime();
+  const { streamSimple } = await import('@earendil-works/pi-ai/compat');
   const settings = llmModelSettings(provider, modelId);
   const reasoning = settings.effortLevels.length > 0;
   runtime.registerProvider(PROVIDER, {
     baseUrl: provider.baseUrl.replace(/\/+$/, ''),
     api: 'openai-completions',
     apiKey: provider.apiKey,
+    streamSimple: (model, context, options) =>
+      streamSimple(model, context, kimiCacheOptions(model, options)),
     models: provider.models.map((id) => {
       const model = llmModelSettings(provider, id);
       return {
@@ -53,7 +63,7 @@ async function resolveModel(provider: StoredLlmProvider, modelId = provider.mode
         input: ['text', 'image'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: model.contextWindow ?? LLM_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: model.maxOutputTokens ?? 32000,
+        maxTokens: model.maxOutputTokens ?? LLM_DEFAULT_OUTPUT_TOKENS,
         // 开推理后 Pi 会把指令消息的 role 写成 OpenAI 专有的 developer，而 Dela 的提供商
         // （DeepSeek/智谱/MiniMax/致远与自定义网关）只认 system，会直接 422 invalid_request_error。
         // Pi 的自动识别靠提供商标识或 baseUrl 里的厂商域名，Dela 把所有提供商都注册成 dela，
@@ -86,6 +96,8 @@ export function isInside(path: string, dir: string): boolean {
 export interface OpenSessionInput {
   cwd: string;
   file?: string;
+  transient?: boolean;
+  isolatedSteps?: boolean;
   provider: StoredLlmProvider;
   /** 追加到 Pi 默认系统提示之后（项目背景、用户自定义指令、dela 命令说明）。 */
   appendSystemPrompt: string[];
@@ -175,9 +187,26 @@ export async function openPiSession(input: OpenSessionInput): Promise<AgentSessi
     }),
   });
   await resourceLoader.reload();
-  const sessionManager = input.file
-    ? pi.SessionManager.open(input.file, piSessionsDir(), input.cwd)
-    : pi.SessionManager.create(input.cwd, piSessionsDir());
+  const sessionManager = input.transient
+    ? pi.SessionManager.inMemory(input.cwd)
+    : input.file
+      ? pi.SessionManager.open(input.file, piSessionsDir(), input.cwd)
+      : pi.SessionManager.create(input.cwd, piSessionsDir());
+  const customTools = [...input.customTools];
+  if (!input.transient && input.isolatedSteps !== false)
+    customTools.push(
+      taskStepTool(input, openPiSession, (stats) => {
+        if (stats.tokens.total > 0)
+          sessionManager.appendUsage('task-step', PROVIDER, input.provider.model, {
+            input: stats.tokens.input,
+            output: stats.tokens.output,
+            cacheRead: stats.tokens.cacheRead,
+            cacheWrite: stats.tokens.cacheWrite,
+            totalTokens: stats.tokens.total,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: stats.cost },
+          });
+      }),
+    );
   const { session } = await pi.createAgentSession({
     cwd: input.cwd,
     agentDir,
@@ -187,9 +216,19 @@ export async function openPiSession(input: OpenSessionInput): Promise<AgentSessi
     settingsManager,
     resourceLoader,
     sessionManager,
-    customTools: input.customTools,
+    customTools,
     excludeTools: input.disabledTools,
   });
+  if (input.transient)
+    try {
+      await session.bindExtensions({
+        mode: 'print',
+        shutdownHandler: () => void session.abort(),
+      });
+    } catch (error) {
+      await shutdownSession(session, 'quit');
+      throw error;
+    }
   return session;
 }
 

@@ -319,6 +319,21 @@ it('有缓存数据时显示本会话累计命中率，保留一位小数', asyn
   expect(document.body.textContent).toContain('90.0%');
 });
 
+it('将累计输入与当前上下文分开显示，缓存计入输入但不重复计算输出', async () => {
+  await act(async () =>
+    root.render(
+      <Harness
+        contextUsage={usage({ inputTokens: 400_000, cachedTokens: 1_200_000, outputTokens: 8000 })}
+      />,
+    ),
+  );
+  openUsage();
+  expect(document.body.textContent).toContain('累计输入1.6M');
+  expect(document.body.textContent).toContain('其中缓存读取1.2M');
+  expect(document.body.textContent).toContain('累计输出8K');
+  expect(document.body.textContent).toContain('75.0%');
+});
+
 it('提供商没有缓存数据时命中率显示 —，不写成 0%', async () => {
   await act(async () => root.render(<Harness contextUsage={usage()} />));
   openUsage();

@@ -619,4 +619,24 @@ describe('上下文用量', () => {
     expect(actual).toMatchObject({ tokens: 50_000, percent: 25 });
     expect(actual?.estimated).toBeUndefined();
   });
+
+  it('累计输入输出独立于当前上下文，未报告缓存时不伪造缓存命中率', () => {
+    const snapshot = stats(50_000);
+    snapshot.tokens = {
+      input: 400_000,
+      output: 8000,
+      cacheRead: 1_200_000,
+      cacheWrite: 0,
+      total: 1_608_000,
+    };
+    expect(contextUsageView(snapshot as never)).toMatchObject({
+      tokens: 50_000,
+      inputTokens: 400_000,
+      cachedTokens: 1_200_000,
+      outputTokens: 8000,
+    });
+    snapshot.tokens.cacheRead = 0;
+    expect(contextUsageView(snapshot as never)?.cachedTokens).toBeUndefined();
+    expect(contextUsageView(snapshot as never)?.inputTokens).toBe(400_000);
+  });
 });

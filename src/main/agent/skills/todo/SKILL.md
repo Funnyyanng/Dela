@@ -18,6 +18,8 @@ description: 待办与 Canvas 作业：查询、创建、完成个人待办，�
 ## 指引
 
 - Canvas 作业只读：区分未完成、已提交、已批改、豁免、需重交；提交要在 Canvas 完成
-- 作业描述是 HTML，读取时返回剥离正文（query_assignments 返回 id，正文经 canvas 命令的资料读取获得）
+- 优先查询本地缓存；需要最新状态时刷新一次，再按课程、截止时间和完成状态筛选。列表按 `offset/limit` 分页，只读相关页
+- 保存只返回完整目标 `item`，删除只返回确认，刷新只返回统计与同步状态；这些结果不再附带整份清单，需要条目时调用分页查询
+- 作业列表不含描述；说明正文通过 `search_canvas_sources`（`kind=assignment`）找到引用后，用 `read_resource` 分页读取，HTML 保留原始链接
 - 截止时间临近需要提醒时，用 curriculum 的 create_event 写入日历
 - 通用：`dela help` 查看全部命令与参数；不确定就先 help，不要猜测

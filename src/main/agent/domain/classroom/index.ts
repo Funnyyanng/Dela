@@ -29,6 +29,79 @@ export const classroomTools = {
     z.object({ courseId: id, offset, limit }).strict(),
     async ({ courseId, offset, limit }) => page(await listVideos(courseId), offset, limit),
   ),
+  outline_classroom_transcript: tool(
+    '先在本地为课堂语音文稿建立紧凑时间索引，默认每十分钟一组，仅返回时间范围、短预览、标题和词频关键词候选及字符数，不返回全文。候选是本地标题/词频索引，不是语义总结或教师确认的重点；按返回时间范围继续读取。',
+    z
+      .object({
+        videoId: id,
+        groupMinutes: z.number().int().min(1).max(60).default(10),
+        offset,
+        limit: z.number().int().min(1).max(30).default(12),
+      })
+      .strict(),
+    async ({ videoId, groupMinutes, offset, limit }) => {
+      const transcript = await getTranscript(videoId);
+      const interval = groupMinutes * 60 * 1000;
+      const groups = new Map<number, NonNullable<typeof transcript>['segments']>();
+      for (const segment of transcript?.segments ?? []) {
+        const start = Math.floor(segment.startMs / interval) * interval;
+        const group = groups.get(start) ?? [];
+        group.push(segment);
+        groups.set(start, group);
+      }
+      const ranges = [...groups.keys()].sort((a, b) => a - b);
+      const segmenter = new Intl.Segmenter('zh', { granularity: 'word' });
+      const stopWords = new Set(
+        '我们 你们 他们 这个 那个 一个 就是 然后 所以 因为 如果 但是 可以 需要 进行 这里 这些 一些 时候 现在 the and for with from this that have will into are not can'.split(
+          ' ',
+        ),
+      );
+      const items = ranges.slice(offset, offset + limit).map((startMs) => {
+        const segments = groups.get(startMs)!;
+        const text = segments.map((segment) => segment.text).join('\n');
+        const counts = new Map<string, number>();
+        for (const part of segmenter.segment(text)) {
+          const word = part.segment.toLocaleLowerCase();
+          if (
+            part.isWordLike &&
+            word.length >= 2 &&
+            word.length <= 24 &&
+            /\p{L}/u.test(word) &&
+            !stopWords.has(word)
+          )
+            counts.set(word, (counts.get(word) ?? 0) + 1);
+        }
+        return {
+          startSeconds: startMs / 1000,
+          endSeconds:
+            segments.reduce((end, segment) => Math.max(end, segment.endMs), startMs + interval) /
+            1000,
+          titleCandidate: segments[0]!.text
+            .trim()
+            .split(/[。！？!?\n]/u, 1)[0]!
+            .slice(0, 48),
+          keywordCandidates: [...counts]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 6)
+            .map(([word]) => word),
+          preview: text.slice(0, 96),
+          totalCharacters: segments.reduce((sum, segment) => sum + segment.text.length, 0),
+        };
+      });
+      return {
+        videoId,
+        available: transcript !== null,
+        method: 'local_title_and_token_frequency',
+        note: '标题和词频候选仅供定位，不代表语义总结或教师确认的重点。原文、公式和例子需要按时间范围读取核对。',
+        groupMinutes,
+        totalCharacters:
+          transcript?.segments.reduce((sum, segment) => sum + segment.text.length, 0) ?? 0,
+        items,
+        total: ranges.length,
+        nextOffset: offset + limit < ranges.length ? offset + limit : null,
+      };
+    },
+  ),
   read_classroom_transcript: tool(
     '读取录像时间范围内的语音文稿，不写文件、不要求工作区。时间单位为秒，默认读取前五分钟；包含与区间重叠的完整段落，正文按字符分页，nextOffset 用于同一区间续读。',
     z

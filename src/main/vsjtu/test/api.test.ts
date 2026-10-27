@@ -5,6 +5,8 @@ const server = vi.hoisted(() => ({
   replies: [] as unknown[],
   urls: [] as string[],
   statuses: [] as number[],
+  cookieChange: undefined as ((event: unknown, cookie: { domain?: string }) => void) | undefined,
+  beforeResponse: undefined as ((url: string) => void) | undefined,
 }));
 vi.mock('electron', () => ({
   net: {
@@ -19,6 +21,7 @@ vi.mock('electron', () => ({
       request.setHeader = () => {};
       request.end = () =>
         queueMicrotask(() => {
+          server.beforeResponse?.(url);
           const response = Object.assign(new EventEmitter(), {
             statusCode: server.statuses.shift() ?? 200,
           });
@@ -32,14 +35,22 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../campus', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../campus')>()),
-  getCampusSession: async () => ({}),
+  getCampusSession: async () => ({
+    cookies: {
+      on: (_event: string, listener: typeof server.cookieChange) => {
+        server.cookieChange = listener;
+      },
+    },
+  }),
 }));
 import { checkVideoLogin, listCourses, listVideos, parseStreams } from '../api';
 
 beforeEach(() => {
+  server.cookieChange?.({}, { domain: 'v.sjtu.edu.cn' });
   server.replies = [];
   server.urls = [];
   server.statuses = [];
+  server.beforeResponse = undefined;
 });
 const identity = { code: '0', result: { user: { code: 'test-user' } } };
 
@@ -329,4 +340,117 @@ it('keeps both valid streams and rejects links outside the known media host', ()
   expect(() =>
     parseStreams({ courseVodViewList: [{ url: 'https://example.com/a.mp4', viewNum: 1 }] }),
   ).toThrow('地址');
+});
+
+describe('short-lived list snapshots', () => {
+  const terms = [{ id: 11, currentTerm: true }];
+  const coursePage = (name = '测试课程') => ({
+    ok: true,
+    data: { records: [{ teclId: 9000, subjCode: 'TEST', subjName: name }], pageCount: 1 },
+  });
+  const videoPage = (videoId = 12) => ({
+    ok: true,
+    data: {
+      records: [
+        { id: videoId, courBeginTime: '2026-10-16 08:00', courEndTime: '2026-10-16 08:45' },
+      ],
+      pageCount: 1,
+    },
+  });
+
+  it('reuses current-term courses after checking login and isolates caller mutations', async () => {
+    server.replies = [identity, terms, coursePage(), identity];
+    const courses = await listCourses();
+    courses[0]!.name = 'caller changed';
+    expect(await listCourses()).toEqual([{ id: 9000, code: 'TEST', name: '测试课程' }]);
+    expect(server.urls).toHaveLength(4);
+    expect(server.urls.at(-1)).toContain('/authority/me');
+  });
+
+  it('deduplicates complete course loads in addition to individual page requests', async () => {
+    server.replies = [identity, terms, coursePage()];
+    const [first, second] = await Promise.all([listCourses(), listCourses()]);
+    expect(first).toEqual(second);
+    expect(server.urls).toHaveLength(3);
+    first[0]!.name = 'changed';
+    expect(second[0]!.name).toBe('测试课程');
+  });
+
+  it('reuses video lists per course and keeps concurrent results independent', async () => {
+    server.replies = [identity, videoPage(), identity, identity, videoPage(13)];
+    const [first, second] = await Promise.all([listVideos(9000), listVideos(9000)]);
+    expect(first).toEqual(second);
+    first[0]!.room = 'caller changed';
+    expect(second[0]!.room).toBe('');
+    expect((await listVideos(9000))[0]!.id).toBe(12);
+    expect((await listVideos(9001))[0]!.id).toBe(13);
+    expect(server.urls).toHaveLength(5);
+  });
+
+  it('reloads after the one-minute snapshot expires', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      server.replies = [identity, videoPage(), identity, identity, videoPage(13)];
+      await listVideos(9000);
+      now.mockReturnValue(1_059_999);
+      expect((await listVideos(9000))[0]!.id).toBe(12);
+      now.mockReturnValue(1_060_001);
+      expect((await listVideos(9000))[0]!.id).toBe(13);
+      expect(server.urls).toHaveLength(5);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('does not retain a failed list load and retries normally on the next call', async () => {
+    server.replies = [identity, { ok: true, data: { unexpected: [] } }, identity, videoPage()];
+    await expect(listVideos(9000)).rejects.toThrow('数据格式已变化');
+    expect((await listVideos(9000))[0]!.id).toBe(12);
+    expect(server.urls).toHaveLength(4);
+  });
+
+  it('clears previous snapshots after an expired login instead of returning stale data', async () => {
+    server.replies = [identity, videoPage(), { code: '-1', result: null }, identity, videoPage(13)];
+    await listVideos(9000);
+    await expect(listVideos(9000)).rejects.toThrow('登录');
+    expect((await listVideos(9000))[0]!.id).toBe(13);
+    expect(server.urls).toHaveLength(5);
+  });
+
+  it('invalidates both course and video snapshots when campus login cookies change', async () => {
+    server.replies = [identity, terms, coursePage(), identity, videoPage()];
+    await listCourses();
+    await listVideos(9000);
+    server.cookieChange?.({}, { domain: '.sjtu.edu.cn' });
+    server.replies = [
+      { code: '0', result: { user: { code: 'another-user' } } },
+      terms,
+      coursePage('新账号课程'),
+      identity,
+      videoPage(13),
+    ];
+    expect((await listCourses())[0]!.name).toBe('新账号课程');
+    expect((await listVideos(9000))[0]!.id).toBe(13);
+    expect(server.urls).toHaveLength(10);
+  });
+
+  it('keeps snapshots for unrelated cookies', async () => {
+    server.replies = [identity, videoPage(), identity];
+    await listVideos(9000);
+    server.cookieChange?.({}, { domain: 'mail.sjtu.edu.cn' });
+    expect((await listVideos(9000))[0]!.id).toBe(12);
+    expect(server.urls).toHaveLength(3);
+  });
+
+  it('does not return or retain an old account response that finishes after login changes', async () => {
+    server.replies = [identity, videoPage(), identity, videoPage(13)];
+    server.beforeResponse = (url) => {
+      if (!url.includes('subject_vod_list_new')) return;
+      server.beforeResponse = undefined;
+      server.cookieChange?.({}, { domain: 'v.sjtu.edu.cn' });
+    };
+    await expect(listVideos(9000)).rejects.toThrow('登录');
+    expect((await listVideos(9000))[0]!.id).toBe(13);
+    expect(server.urls).toHaveLength(4);
+  });
 });

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   createWorkspaceEntry,
-  getWorkspaceState,
+  entry,
   removeWorkspaceEntry,
   updateWorkspaceEntry,
 } from '../../../workspace/api';
@@ -39,7 +39,7 @@ export const updateEntryTool = tool(
     return {
       ref: { type: 'workspace', id: update.id },
       ...(update.fromPath ? { fromPath: update.fromPath, toPath: update.toPath } : {}),
-      entry: getWorkspaceState().entries.find((e) => e.id === update.id),
+      entry: entry(update.id),
     };
   },
 );

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type {
   ShuiyuanPost,
   ShuiyuanSiteStructure,
@@ -76,12 +77,36 @@ function post(id: number, postNumber: number): ShuiyuanPost {
   };
 }
 
+function topic(
+  posts: readonly ShuiyuanPost[],
+  stream = posts.map((post) => post.id),
+): ShuiyuanTopicDetail {
+  return {
+    id: 42,
+    title: '分页长帖',
+    categoryId: 4,
+    tags: [],
+    postsCount: stream.length,
+    likeCount: 5,
+    views: 1000,
+    createdAt: '2026-09-01T08:00:00.000Z',
+    lastPostedAt: null,
+    closed: false,
+    archetype: 'regular',
+    bookmarked: false,
+    stream,
+    posts,
+  };
+}
+
+let bindingSequence = 0;
+
 beforeEach(() => {
   vi.clearAllMocks();
   state.mockReturnValue({
     connected: true,
     username: 'alice',
-    boundAt: '2026-01-01T00:00:00.000Z',
+    boundAt: new Date(Date.UTC(2026, 0, 1) + ++bindingSequence * 1000).toISOString(),
   });
 });
 
@@ -199,7 +224,246 @@ describe('list_shuiyuan_categories', () => {
 });
 
 describe('read_shuiyuan_topic → read_shuiyuan_posts continuation chain', () => {
-  it('exposes the full stream and the next chunk of unread post ids', async () => {
+  it('keeps initial reads live, marks cached continuations and propagates service failures', async () => {
+    const long = { ...post(10, 1), cooked: '正文'.repeat(1000) };
+    getTopic.mockResolvedValue(topic([long]));
+    const first = (await shuiyuanTools.read_shuiyuan_topic.execute({
+      topicId: 42,
+      limit: 100,
+    })) as {
+      nextCursor: unknown;
+      freshness: unknown;
+    };
+    expect(first.freshness).toEqual({ kind: 'realtime' });
+    expect(await shuiyuanTools.read_shuiyuan_topic.execute(first.nextCursor)).toMatchObject({
+      freshness: { kind: 'cached' },
+    });
+    expect(getTopic).toHaveBeenCalledOnce();
+    expect(loadPosts).not.toHaveBeenCalled();
+    await shuiyuanTools.read_shuiyuan_topic.execute({ topicId: 42, limit: 100 });
+    expect(getTopic).toHaveBeenCalledTimes(2);
+    getTopic.mockRejectedValueOnce(new Error('无法连接水源社区，请检查网络后重试'));
+    await expect(shuiyuanTools.read_shuiyuan_topic.execute({ topicId: 42 })).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+    });
+  });
+
+  it('rejects an expired cursor without serving stale content or fetching under the old position', async () => {
+    getTopic.mockResolvedValue(topic([{ ...post(10, 1), cooked: '正文'.repeat(1000) }]));
+    const first = (await shuiyuanTools.read_shuiyuan_topic.execute({
+      topicId: 42,
+      limit: 100,
+    })) as { nextCursor: unknown };
+    const time = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5 * 60 * 1000 + 1);
+    try {
+      await expect(
+        shuiyuanTools.read_shuiyuan_topic.execute(first.nextCursor),
+      ).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: expect.stringContaining('快照已过期'),
+      });
+      expect(getTopic).toHaveBeenCalledOnce();
+      await shuiyuanTools.read_shuiyuan_topic.execute({ topicId: 42, limit: 100 });
+      expect(getTopic).toHaveBeenCalledTimes(2);
+    } finally {
+      time.mockRestore();
+    }
+  });
+
+  it.each(['bob', 'alice'])(
+    'does not reuse a continuation after rebinding as %s',
+    async (username) => {
+      loadPosts.mockResolvedValue([{ ...post(10, 1), cooked: '正文'.repeat(1000) }]);
+      const first = (await shuiyuanTools.read_shuiyuan_posts.execute({
+        topicId: 42,
+        postIds: [10],
+        limit: 100,
+      })) as { nextCursor: unknown };
+      state.mockReturnValue({
+        connected: true,
+        username,
+        boundAt: '2026-02-01T00:00:00.000Z',
+      });
+      await expect(
+        shuiyuanTools.read_shuiyuan_posts.execute(first.nextCursor),
+      ).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: expect.stringContaining('账号已切换'),
+      });
+      expect(loadPosts).toHaveBeenCalledOnce();
+      await shuiyuanTools.read_shuiyuan_posts.execute({ topicId: 42, postIds: [10], limit: 100 });
+      expect(loadPosts).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('evicts old floor bodies after a hundred cached entries while preserving cursor reads', async () => {
+    const all = Array.from({ length: 110 }, (_, index) => post(100 + index, index + 1));
+    getTopic.mockResolvedValue(
+      topic(
+        all.slice(0, 20),
+        all.map((post) => post.id),
+      ),
+    );
+    loadPosts.mockImplementation(async (_topicId, ids) => {
+      const selected = z.array(z.number().int().positive()).parse(ids);
+      return all.filter((post) => selected.includes(post.id));
+    });
+    let result = (await shuiyuanTools.read_shuiyuan_topic.execute({ topicId: 42 })) as {
+      nextCursor: { snapshotId: string } | null;
+    };
+    const snapshotId = result.nextCursor!.snapshotId;
+    let pages = 0;
+    while (result.nextCursor) {
+      result = (await shuiyuanTools.read_shuiyuan_topic.execute(
+        result.nextCursor,
+      )) as typeof result;
+      expect(++pages).toBeLessThan(10);
+    }
+    const previous = loadPosts.mock.calls.length;
+    await shuiyuanTools.read_shuiyuan_topic.execute({ topicId: 42, postOffset: 0, snapshotId });
+    expect(getTopic).toHaveBeenCalledOnce();
+    expect(loadPosts).toHaveBeenCalledTimes(previous + 1);
+    expect(loadPosts).toHaveBeenLastCalledWith(
+      42,
+      all.slice(10, 20).map((post) => post.id),
+    );
+  });
+
+  it('keeps oversized floor bodies out of the snapshot without preventing subsequent character reads', async () => {
+    const long = { ...post(10, 1), cooked: 'x'.repeat(4 * 1024 * 1024 + 1) };
+    getTopic.mockResolvedValue(topic([long]));
+    loadPosts.mockResolvedValue([long]);
+    const first = (await shuiyuanTools.read_shuiyuan_topic.execute({
+      topicId: 42,
+      limit: 100,
+    })) as { nextCursor: unknown };
+    expect(loadPosts).not.toHaveBeenCalled();
+    const second = (await shuiyuanTools.read_shuiyuan_topic.execute(first.nextCursor)) as {
+      posts: { cooked: string; offset: number }[];
+      nextCursor: unknown;
+    };
+    expect(second.posts[0]).toMatchObject({ offset: 100, cooked: 'x'.repeat(100) });
+    expect(second.nextCursor).not.toBeNull();
+    expect(getTopic).toHaveBeenCalledOnce();
+    expect(loadPosts).toHaveBeenCalledOnce();
+  });
+
+  it('keeps ten thousand stream ids out of one response without hiding the continuation', async () => {
+    const stream = Array.from({ length: 10000 }, (_, index) => 100 + index);
+    getTopic.mockResolvedValue(topic([{ ...post(100, 1), cooked: '长楼'.repeat(10000) }], stream));
+    loadPosts.mockResolvedValue([]);
+    const result = (await shuiyuanTools.read_shuiyuan_topic.execute({
+      topicId: 42,
+      limit: 100,
+    })) as {
+      stream: number[];
+      streamTotal: number;
+      nextStreamOffset: number;
+      posts: { cooked: string }[];
+      nextCursor: unknown;
+    };
+    expect(result.stream).toEqual(stream.slice(0, 50));
+    expect(result.streamTotal).toBe(10000);
+    expect(result.nextStreamOffset).toBe(50);
+    expect(result.posts[0]!.cooked).toHaveLength(100);
+    expect(result.nextCursor).toEqual({
+      topicId: 42,
+      postOffset: 0,
+      offset: 100,
+      limit: 100,
+      snapshotId: expect.any(String),
+    });
+    expect(JSON.stringify(result).length).toBeLessThan(4000);
+  });
+
+  it('follows the topic cursor through long HTML and later floors without losing or duplicating characters', async () => {
+    const all = Array.from({ length: 63 }, (_, index) => ({
+      ...post(100 + index, index + 1),
+      cooked:
+        index === 0 || index === 24
+          ? `<p>${'中文😀&amp;'.repeat(900)}</p>`
+          : `<p>完整第${index + 1}楼</p>`,
+    }));
+    getTopic.mockResolvedValue(
+      topic(
+        all.slice(0, 20),
+        all.map((post) => post.id),
+      ),
+    );
+    loadPosts.mockImplementation(async (_topicId, ids) => {
+      const selected = z.array(z.number().int().positive()).parse(ids);
+      return all.filter((post) => selected.includes(post.id)).toReversed();
+    });
+    const collected = new Map<number, string>();
+    let input: unknown = { topicId: 42, limit: 800 };
+    let pages = 0;
+    while (input) {
+      const result = (await shuiyuanTools.read_shuiyuan_topic.execute(input)) as {
+        posts: {
+          id: number;
+          cooked: string;
+          offset: number;
+          totalCharacters: number;
+          nextOffset: number | null;
+        }[];
+        nextCursor: unknown;
+      };
+      expect(result.posts.reduce((sum, post) => sum + post.cooked.length, 0)).toBeLessThanOrEqual(
+        800,
+      );
+      for (const post of result.posts) {
+        const previous = collected.get(post.id) ?? '';
+        expect(post.offset).toBe(previous.length);
+        collected.set(post.id, previous + post.cooked);
+        if (post.nextOffset === null)
+          expect(collected.get(post.id)).toHaveLength(post.totalCharacters);
+      }
+      input = result.nextCursor;
+      expect(++pages).toBeLessThan(100);
+    }
+    expect(pages).toBeGreaterThan(4);
+    expect([...collected]).toEqual(all.map((post) => [post.id, post.cooked]));
+    expect(getTopic).toHaveBeenCalledOnce();
+    expect(loadPosts.mock.calls.length).toBeLessThan(pages);
+  });
+
+  it('follows explicit post cursors in requested order, reports missing ids and preserves empty floors', async () => {
+    const all = [
+      { ...post(10, 1), cooked: '正文甲'.repeat(900) },
+      { ...post(11, 2), cooked: '' },
+      { ...post(12, 3), cooked: '<p>末楼</p>'.repeat(80) },
+    ];
+    loadPosts.mockImplementation(async (_topicId, ids) => {
+      const selected = z.array(z.number().int().positive()).parse(ids);
+      return all.filter((post) => selected.includes(post.id)).toReversed();
+    });
+    const collected = new Map<number, string>();
+    let input: unknown = { topicId: 42, postIds: [10, 11, 99, 12], limit: 300 };
+    let pages = 0;
+    const missing = new Set<number>();
+    while (input) {
+      const result = (await shuiyuanTools.read_shuiyuan_posts.execute(input)) as {
+        posts: { id: number; cooked: string; offset: number }[];
+        missingPostIds?: number[];
+        nextCursor: unknown;
+      };
+      expect(result.posts.reduce((sum, post) => sum + post.cooked.length, 0)).toBeLessThanOrEqual(
+        300,
+      );
+      for (const post of result.posts) {
+        expect(post.offset).toBe((collected.get(post.id) ?? '').length);
+        collected.set(post.id, (collected.get(post.id) ?? '') + post.cooked);
+      }
+      for (const id of result.missingPostIds ?? []) missing.add(id);
+      input = result.nextCursor;
+      expect(++pages).toBeLessThan(30);
+    }
+    expect([...collected]).toEqual(all.map((post) => [post.id, post.cooked]));
+    expect([...missing]).toEqual([99]);
+    expect(loadPosts).toHaveBeenCalledOnce();
+  });
+
+  it('bounds the stream and exposes the next chunk of unread post ids', async () => {
     const detail: ShuiyuanTopicDetail = {
       id: 42,
       title: '长帖',
@@ -221,14 +485,26 @@ describe('read_shuiyuan_topic → read_shuiyuan_posts continuation chain', () =>
       stream: number[];
       posts: { id: number; cooked: string }[];
       continuation: { nextPostIds: number[]; remainingCount: number };
+      streamTotal: number;
+      nextStreamOffset: number | null;
+      nextCursor: unknown;
       url: string;
     };
     expect(getTopic).toHaveBeenCalledWith(42, undefined);
-    expect(result.stream).toHaveLength(60);
+    expect(result.stream).toHaveLength(50);
+    expect(result.streamTotal).toBe(60);
+    expect(result.nextStreamOffset).toBe(50);
     expect(result.posts).toHaveLength(20);
     expect(result.posts[0]!.cooked).toBe('<p>第 1 楼</p>');
     expect(result.continuation.nextPostIds).toEqual(Array.from({ length: 40 }, (_, i) => 120 + i));
     expect(result.continuation.remainingCount).toBe(40);
+    expect(result.nextCursor).toEqual({
+      topicId: 42,
+      postOffset: 20,
+      offset: 0,
+      limit: 6000,
+      snapshotId: expect.any(String),
+    });
     expect(result.url).toBe('https://shuiyuan.sjtu.edu.cn/t/topic/42');
   });
 

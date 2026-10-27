@@ -12,7 +12,11 @@ vi.mock('electron', () => ({
   app: { getPath: () => tmpdir(), isPackaged: false, getAppPath: () => tmpdir() },
 }));
 vi.mock('node-pty', () => ({ spawn: vi.fn() }));
-import { COMMAND_BRIDGE } from '../commands';
+vi.mock('../../settings/prefs', async (original) => ({
+  ...(await original<typeof import('../../settings/prefs')>()),
+  experimentEnabled: () => true,
+}));
+import { COMMAND_BRIDGE, startDomainBridge } from '../commands';
 import { locateBash } from '../../terminal';
 
 /** 执行 `dela <line>`，返回 curl 桩捕获到的 --data JSON。 */
@@ -44,5 +48,34 @@ describe('dela 命令桥', () => {
       command: 'todo_search',
       input: { query: 'x' },
     });
+  });
+
+  it('先取紧凑领域索引，再按领域或单命令获取参数，保留完整help契约', async () => {
+    const bridge = await startDomainBridge();
+    const help = async (input: object) => {
+      const response = await fetch(bridge.url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${bridge.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: 'help', input }),
+      });
+      return ((await response.json()) as { result: { name?: string; domain?: string }[] }).result;
+    };
+    try {
+      const all = await help({});
+      const summary = await help({ summary: true });
+      expect(JSON.stringify(summary).length).toBeLessThan(JSON.stringify(all).length / 3);
+      expect(summary).toContainEqual(expect.objectContaining({ domain: 'canvas' }));
+      const canvas = await help({ domain: 'canvas' });
+      expect(canvas.length).toBeGreaterThan(0);
+      expect(canvas.every((item) => item.name?.includes('canvas'))).toBe(true);
+      const document = await help({ command: 'prepare_document' });
+      expect(document).toHaveLength(1);
+      expect(document[0]).toMatchObject({
+        name: 'prepare_document',
+        parameters: { type: 'object' },
+      });
+    } finally {
+      bridge.close();
+    }
   });
 });

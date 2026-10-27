@@ -42,6 +42,13 @@ const tools: Omit<AgentCapabilityView, 'enabled'>[] = [
     domainLabel: '基础',
   },
   {
+    name: 'run_task_step',
+    label: '分步处理',
+    description: '逐章或逐份处理长资料，保存完整结果后只保留简短摘要，释放该步原文',
+    domain: 'core',
+    domainLabel: '基础',
+  },
+  {
     name: 'grep',
     label: '搜索内容',
     description: '按内容搜索文件（ripgrep）',

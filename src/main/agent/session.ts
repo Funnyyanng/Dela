@@ -470,14 +470,16 @@ export function contextUsageView(
       : null;
   // 缓存命中率的分子分母都取本会话累计：SessionStats 聚合会话文件里的全部条目（含已被
   // 压缩或被分支抛弃的历史，那些请求确实按缓存价计过费）。提供商不上报缓存时这里恒为 0，
-  // 直接下发会被读成「一次都没命中」，所以只在出现过缓存读或写时才带上这两个字段。
-  const { input, cacheRead, cacheWrite } = stats.tokens;
+  // 直接下发会被读成「一次都没命中」，所以只在出现过缓存读或写时才带上缓存字段。
+  const { input, output, cacheRead, cacheWrite } = stats.tokens;
   return {
     tokens: usage.tokens,
     contextWindow: usage.contextWindow,
     percent: usage.percent,
     ...estimate,
-    ...(cacheRead + cacheWrite > 0 ? { inputTokens: input, cachedTokens: cacheRead } : {}),
+    inputTokens: input,
+    outputTokens: output,
+    ...(cacheRead + cacheWrite > 0 ? { cachedTokens: cacheRead } : {}),
   };
 }
 

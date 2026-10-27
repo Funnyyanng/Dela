@@ -23,6 +23,7 @@ const verbs: Record<string, { doing: string; done: string; noun: string }> = {
   ls: { doing: '正在查看', done: '查看', noun: '个目录' },
   web_search: { doing: '正在搜索网页', done: '搜索网页', noun: '次' },
   web_fetch: { doing: '正在读取网页', done: '读取网页', noun: '个' },
+  run_task_step: { doing: '正在处理', done: '完成', noun: '个步骤' },
 };
 
 function verbOf(name: string) {
@@ -38,6 +39,10 @@ export function stepTarget(result: AgentToolResult): { short: string; full: stri
   const input = (result.input ?? {}) as Record<string, unknown>;
   const text = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : '');
   switch (result.name) {
+    case 'run_task_step': {
+      const path = text('outputPath');
+      return { short: basename(path), full: path };
+    }
     case 'read':
     case 'write':
     case 'edit':

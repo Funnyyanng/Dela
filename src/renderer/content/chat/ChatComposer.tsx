@@ -74,7 +74,9 @@ function formatSize(size: number): string {
 }
 
 function formatTokens(tokens: number): string {
-  return tokens < 1000 ? '0K' : `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+  if (tokens < 1000) return String(tokens);
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(2).replace(/\.?0+$/, '')}M`;
+  return `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}K`;
 }
 
 function usageTone(percent: number | null): 'ink' | 'orange' | 'red' {
@@ -1061,9 +1063,36 @@ function ContextIndicator({ usage }: { usage: ContextUsageView }) {
           </div>
           {/* 按本会话累计显示（不是最近一轮）：单轮命中率受该轮是否新建缓存影响，波动大、看不出趋势。 */}
           <div className="mt-2 flex items-baseline justify-between gap-3">
-            <span className="text-13 text-ink-2">缓存命中率</span>
+            <span className="text-13 text-ink-2">会话缓存命中率</span>
             <span className="text-xs tabular-nums text-ink-3">{cacheHitRateText(usage)}</span>
           </div>
+          {usage.inputTokens !== undefined && (
+            <div className="mt-2 flex items-baseline justify-between gap-3">
+              <span className="text-13 text-ink-2">累计输入</span>
+              <span className="text-xs tabular-nums text-ink-3">
+                {formatTokens(usage.inputTokens + (usage.cachedTokens ?? 0))}
+              </span>
+            </div>
+          )}
+          {usage.cachedTokens !== undefined && (
+            <div className="mt-2 flex items-baseline justify-between gap-3">
+              <span className="text-13 text-ink-2">其中缓存读取</span>
+              <span className="text-xs tabular-nums text-ink-3">
+                {formatTokens(usage.cachedTokens)}
+              </span>
+            </div>
+          )}
+          {usage.outputTokens !== undefined && (
+            <div className="mt-2 flex items-baseline justify-between gap-3">
+              <span className="text-13 text-ink-2">累计输出</span>
+              <span className="text-xs tabular-nums text-ink-3">
+                {formatTokens(usage.outputTokens)}
+              </span>
+            </div>
+          )}
+          <p className="mt-2 text-xs leading-relaxed text-ink-3">
+            上下文是当前占用；累计用量包含每次调用。缓存由模型服务报告。
+          </p>
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

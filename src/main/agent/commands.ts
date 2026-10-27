@@ -56,14 +56,41 @@ const commands: Record<string, AgentTool> = Object.assign(
 
 async function executeDomainCommand(name: string, input: unknown) {
   if (name === 'help') {
-    const selected =
-      typeof input === 'object' && input !== null && 'command' in input
-        ? String(input.command)
-        : '';
+    const {
+      command: selected,
+      domain: selectedDomain,
+      summary,
+    } = z
+      .object({
+        command: z.string().default(''),
+        domain: z.string().default(''),
+        summary: z.boolean().default(false),
+      })
+      .parse(input);
     const shuiyuanOff = !experimentEnabled('shuiyuan');
+    const domains = [
+      {
+        name: 'documents',
+        description: '按需读取文件与准备、释放文档解析任务',
+        commands: ['read_resource', 'prepare_document', 'release_document'],
+      },
+      ...commandDomains.map((domain) => ({ ...domain, commands: Object.keys(domain.commands) })),
+    ].filter((domain) => !shuiyuanOff || domain.name !== 'shuiyuan');
+    if (selectedDomain && !domains.some((domain) => domain.name === selectedDomain))
+      throw new Error(`未知命令领域：${selectedDomain}`);
+    if (summary)
+      return domains
+        .filter((domain) => !selectedDomain || domain.name === selectedDomain)
+        .map((domain) => ({
+          domain: domain.name,
+          description: domain.description,
+          commands: domain.commands,
+        }));
+    const domainCommands = domains.find((domain) => domain.name === selectedDomain)?.commands;
     return Object.entries(commands)
       .filter(([name]) => !shuiyuanOff || !Object.hasOwn(shuiyuanTools, name))
       .filter(([name]) => !selected || name === selected)
+      .filter(([name]) => !domainCommands || domainCommands.includes(name))
       .map(([name, command]) => ({
         name,
         description: command.description,

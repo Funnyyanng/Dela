@@ -31,8 +31,8 @@ export interface ChatSessionSummary {
 }
 
 /** percent 为 0–100 百分数；tokens null = 暂不可知（如压缩后、Pi 也没给出估计）。
- *  inputTokens / cachedTokens 是本会话累计用量（Pi SessionStats.tokens 的 input / cacheRead，
- *  含已被压缩掉的历史），仅在提供商确实上报过缓存时才带上，见 main/agent/session.ts 的 usageOf。 */
+ *  inputTokens / cachedTokens / outputTokens 是本会话累计用量，含已压缩或重试的历史；
+ *  cachedTokens 仅在提供商确实上报过缓存时带上。 */
 export interface ContextUsageView {
   tokens: number | null;
   contextWindow: number;
@@ -43,6 +43,8 @@ export interface ContextUsageView {
   inputTokens?: number;
   /** 本会话累计缓存读取 token；与 inputTokens 同时出现。 */
   cachedTokens?: number;
+  /** 本会话累计输出 token，包含提供商计入输出的思考 token。 */
+  outputTokens?: number;
 }
 
 export interface WorkspaceChat {

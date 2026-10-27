@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const state = vi.hoisted(() => ({ root: '' }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 import { closeDatabase, getDatabase } from '../../database';
+import { agentEnvironment, closeDomainBridge } from '../environment';
 import {
   addMcpServer,
   executeMcpTool,
@@ -42,6 +43,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  closeDomainBridge();
   closeDatabase();
   rmSync(state.root, { recursive: true, force: true });
 });
@@ -52,6 +54,31 @@ beforeEach(async () => {
 });
 
 describe('MCP 连接与工具发现', () => {
+  it.each([false, true])(
+    '模型只收到一次MCP正文，结构化结果不重复注入 (structuredOnly=%s)',
+    async (structuredOnly) => {
+      await addMcpServer({
+        ...echoConfig,
+        env: structuredOnly ? { DELA_STRUCTURED_ONLY: '1' } : {},
+      });
+      const environment = await agentEnvironment().sessionOptions(null, state.root);
+      const tool = environment.customTools.find((item) => item.name === 'mcp_echo_srv_echo')!;
+      const result = await tool.execute(
+        'test',
+        { message: '你好' },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      const texts = result.content.flatMap((block) => (block.type === 'text' ? [block.text] : []));
+      expect(texts).toHaveLength(1);
+      if (structuredOnly) expect(JSON.parse(texts[0]!)).toEqual({ echoed: true });
+      else expect(texts).toEqual(['echo:你好']);
+      expect(result.details).toEqual({ echoed: true });
+    },
+    20_000,
+  );
+
   it('add 即连接：connected 视图、工具计数与命名空间定义', async () => {
     const views = await addMcpServer(echoConfig);
     expect(views).toHaveLength(1);

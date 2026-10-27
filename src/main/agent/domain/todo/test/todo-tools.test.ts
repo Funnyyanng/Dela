@@ -135,14 +135,58 @@ describe('query_assignments', () => {
 });
 
 describe('save_todo', () => {
-  it('passes color and completion through and returns the slimmed state', () => {
-    save.mockReturnValue(todoState());
+  it('passes color and completion through and returns only the complete saved item', () => {
     const input = { title: '复习', completed: true, color: 'sage' };
+    const target = todoItem({ id: 'new', title: input.title, status: 'completed', color: 'sage' });
+    save.mockReturnValue(todoState({ items: [...todoState().items, target] }));
     const result = todoTools.save_todo.execute(input) as {
-      items: { description?: unknown }[];
+      item: TodoItem;
+      total: number;
     };
     expect(save).toHaveBeenCalledWith(input);
-    expect(result.items.every((item) => item.description === undefined)).toBe(true);
+    expect(result.item).toEqual(target);
+    expect(result.total).toBe(3);
+    expect(result).not.toHaveProperty('items');
+  });
+
+  it('does not repeat unrelated long notes when saving, deleting or refreshing a large list', async () => {
+    const items = Array.from({ length: 500 }, (_, i) =>
+      todoItem({ id: `old-${i}`, title: '复习', notes: 'unrelated'.repeat(1000) }),
+    );
+    const target = todoItem({
+      id: 'new',
+      title: '复习',
+      notes: '完整保存的备注',
+      dueAt: '2026-10-01T00:00:00.000Z',
+      calendar: true,
+      color: 'sage',
+      status: 'completed',
+    });
+    state.mockReturnValue(todoState({ items }));
+    save.mockReturnValue(todoState({ items: [...items, target] }));
+    const created = todoTools.save_todo.execute({ title: target.title, notes: target.notes }) as {
+      item: TodoItem;
+    };
+    expect(created.item).toEqual(target);
+    expect(created).not.toHaveProperty('items');
+    expect(JSON.stringify(created)).not.toContain('unrelated');
+    state.mockReturnValue(todoState({ items: [...items, target] }));
+    const updated = { ...target, notes: '修改后的完整备注' };
+    save.mockReturnValue(todoState({ items: [...items, updated] }));
+    expect(
+      todoTools.save_todo.execute({ id: target.id, title: target.title, notes: updated.notes }),
+    ).toMatchObject({ item: updated, total: 501 });
+    remove.mockReturnValue(todoState({ items }));
+    const removed = todoTools.remove_todo.execute({ id: target.id });
+    expect(removed).toMatchObject({ removedId: target.id, removed: true, total: 500 });
+    expect(removed).not.toHaveProperty('items');
+    refresh.mockResolvedValue(todoState({ items }));
+    const refreshed = await todoTools.refresh_todos.execute({});
+    expect(refreshed).toMatchObject({ total: 500, personal: 500, assignments: 0 });
+    expect(refreshed).not.toHaveProperty('items');
+    expect(JSON.stringify(refreshed)).not.toContain('unrelated');
+    const page = todoTools.query_todos.execute({ offset: 499, limit: 2 });
+    expect(page).toMatchObject({ items: [items[499], target], nextOffset: null, total: 501 });
   });
 
   it('maps a missing target id to NOT_FOUND', () => {

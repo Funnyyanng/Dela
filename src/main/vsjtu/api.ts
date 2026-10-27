@@ -13,7 +13,7 @@ const object = z.record(z.string(), z.unknown());
 const id = z.coerce.number().int().positive();
 const requests = new Map<string, Promise<unknown>>();
 
-function requestJson(url: string, key = url): Promise<unknown> {
+function requestJson(url: string, key = `${transcriptGeneration}:${url}`): Promise<unknown> {
   const pending = requests.get(key);
   if (pending) return pending;
   const task = (async () => {
@@ -47,15 +47,25 @@ async function requestOnce(url: string): Promise<unknown> {
 }
 
 export async function checkVideoLogin(): Promise<void> {
-  const payload = object.safeParse(
-    await requestJson('https://v.sjtu.edu.cn/cloud-rbac/authority/me'),
-  );
-  if (
-    !payload.success ||
-    String(payload.data.code) !== '0' ||
-    !object.safeParse(payload.data.result).data?.user
-  )
-    throw loginError();
+  const generation = await watchVideoSession();
+  try {
+    const payload = object.safeParse(
+      await requestJson('https://v.sjtu.edu.cn/cloud-rbac/authority/me'),
+    );
+    if (
+      generation !== transcriptGeneration ||
+      !payload.success ||
+      String(payload.data.code) !== '0' ||
+      !object.safeParse(payload.data.result).data?.user
+    )
+      throw loginError();
+  } catch (error) {
+    transcriptGeneration++;
+    courseLists.clear();
+    videoLists.clear();
+    clearTranscriptCache();
+    throw error;
+  }
 }
 
 function unwrap(payload: unknown): unknown {
@@ -108,8 +118,49 @@ async function allPages(path: string, params: Record<string, string>): Promise<u
   }
 }
 
-export async function listCourses(): Promise<VideoCourse[]> {
+const LIST_TTL_MS = 60 * 1000;
+interface ListSnapshot<T> {
+  pending?: Promise<T[]>;
+  value?: T[];
+  expiresAt: number;
+}
+const courseLists = new Map<number, ListSnapshot<VideoCourse>>();
+const videoLists = new Map<number, ListSnapshot<ClassroomVideo>>();
+
+async function cachedList<T>(
+  cache: Map<number, ListSnapshot<T>>,
+  key: number,
+  load: () => Promise<T[]>,
+): Promise<T[]> {
   await checkVideoLogin();
+  for (const [id, entry] of cache)
+    if (!entry.pending && entry.expiresAt <= Date.now()) cache.delete(id);
+  const cached = cache.get(key);
+  if (cached?.pending) return structuredClone(await cached.pending);
+  if (cached?.value) return structuredClone(cached.value);
+  const generation = transcriptGeneration;
+  const pending = load().then((value) => {
+    if (generation !== transcriptGeneration) throw loginError();
+    return value;
+  });
+  const snapshot: ListSnapshot<T> = { pending, expiresAt: 0 };
+  cache.set(key, snapshot);
+  try {
+    snapshot.value = await pending;
+    snapshot.pending = undefined;
+    snapshot.expiresAt = Date.now() + LIST_TTL_MS;
+    return structuredClone(snapshot.value);
+  } catch (error) {
+    if (cache.get(key) === snapshot) cache.delete(key);
+    throw error;
+  }
+}
+
+export function listCourses(): Promise<VideoCourse[]> {
+  return cachedList(courseLists, 0, loadCourses);
+}
+
+async function loadCourses(): Promise<VideoCourse[]> {
   const termResponse = await requestJson(`${BASE}/list/termYear`);
   const terms = z
     .array(z.object({ id, currentTerm: z.boolean().optional() }))
@@ -150,10 +201,14 @@ export async function listCourses(): Promise<VideoCourse[]> {
   return [...courses.values()];
 }
 
-export async function listVideos(courseId: number): Promise<ClassroomVideo[]> {
-  await checkVideoLogin();
+export function listVideos(courseId: number): Promise<ClassroomVideo[]> {
+  courseId = id.parse(courseId);
+  return cachedList(videoLists, courseId, () => loadVideos(courseId));
+}
+
+async function loadVideos(courseId: number): Promise<ClassroomVideo[]> {
   const records = await allPages('subject_vod_list_new', {
-    teclIds: String(id.parse(courseId)),
+    teclIds: String(courseId),
     'page.orders[0].asc': 'false',
     'page.orders[0].field': 'courBeginTime',
   });
@@ -228,8 +283,7 @@ function clearTranscriptCache(): void {
   transcriptTimer = undefined;
 }
 
-export async function getTranscript(videoId: number): Promise<VideoTranscript | null> {
-  videoId = id.parse(videoId);
+async function watchVideoSession(): Promise<number> {
   const campus = await getCampusSession();
   if (!transcriptSessionWatched) {
     campus.cookies.on('changed', (_event, cookie) => {
@@ -237,11 +291,18 @@ export async function getTranscript(videoId: number): Promise<VideoTranscript | 
       if (domain && ('v.sjtu.edu.cn' === domain || 'v.sjtu.edu.cn'.endsWith(`.${domain}`))) {
         transcriptGeneration++;
         clearTranscriptCache();
+        courseLists.clear();
+        videoLists.clear();
       }
     });
     transcriptSessionWatched = true;
   }
-  const generation = transcriptGeneration;
+  return transcriptGeneration;
+}
+
+export async function getTranscript(videoId: number): Promise<VideoTranscript | null> {
+  videoId = id.parse(videoId);
+  const generation = await watchVideoSession();
   try {
     // 抓取请求自身会以 401/403/重定向/code:-1 报登录失效；/me 只用于缓存命中的复核。
     if (cachedTranscript?.videoId === videoId) {

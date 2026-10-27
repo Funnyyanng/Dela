@@ -17,7 +17,22 @@ import { dirname, isAbsolute, join, sep } from 'node:path';
 import { shell } from 'electron';
 import { EventEmitter } from 'node:events';
 
-const state = vi.hoisted(() => ({ root: '', execFile: vi.fn(), spawn: vi.fn() }));
+const state = vi.hoisted(() => ({
+  root: '',
+  execFile: vi.fn(),
+  spawn: vi.fn(),
+  readDirectories: [] as string[],
+}));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...fs,
+    readdir: async (...args: Parameters<typeof fs.readdir>) => {
+      state.readDirectories.push(String(args[0]));
+      return fs.readdir(...args);
+    },
+  };
+});
 vi.mock('node:child_process', () => ({ execFile: state.execFile, spawn: state.spawn }));
 vi.mock('electron', () => ({ app: { getPath: () => state.root }, shell: { openPath: vi.fn() } }));
 vi.mock('../../database', () => ({ getDatabase: vi.fn() }));
@@ -39,6 +54,7 @@ import {
   entry,
 } from '../api';
 import { openProjectDirectory } from '../project';
+import { listWorkspaceEntriesTool } from '../../agent/domain/workspace/list-entries';
 import {
   getLocalWorkspaceState,
   listLocalDirectory,
@@ -126,6 +142,7 @@ function insertRemoteProject(host: string, path: string): string {
 let db: Database.Database;
 
 beforeEach(() => {
+  state.readDirectories = [];
   state.execFile.mockImplementation((_command, _args, _options, callback) => {
     callback(new Error('not a repository'), '', '');
     return { stdin: { on() {}, end() {} } };
@@ -140,6 +157,46 @@ afterEach(() => {
 });
 
 describe('磁盘工作区', () => {
+  it('Agent 单层浏览只读取指定目录，保留来源引用、项目身份与完整分页', async () => {
+    const project = createWorkspaceEntry({ parentId: null, name: 'course', kind: 'project' });
+    const path = localPathOf(project.id);
+    const child = join(path, 'chapter');
+    mkdirSync(child);
+    const nested = linkProjectFolder(child);
+    writeFileSync(join(path, 'lecture.txt'), 'lecture');
+    mkdirSync(join(child, 'unrelated', 'deep'), { recursive: true });
+    writeFileSync(join(child, 'unrelated', 'deep', 'hidden.txt'), 'deep');
+    const other = createWorkspaceEntry({ parentId: null, name: 'other', kind: 'project' });
+    mkdirSync(join(localPathOf(other.id), 'unrelated', 'deep'), { recursive: true });
+    db.prepare(
+      "INSERT INTO workspace_entries (id, parent_id, name, kind, source_id, local_path, remote_id, updated_at) VALUES ('source-1', NULL, '课件', 'source', 'file:1', ?, NULL, 'now')",
+    ).run(path);
+    state.readDirectories = [];
+    const first = (await listWorkspaceEntriesTool.execute({ parentId: project.id, limit: 2 })) as {
+      items: Array<{ id: string; parentId: string | null; ref: { type: string; id: string } }>;
+      total: number;
+      nextOffset: number | null;
+    };
+    const second = (await listWorkspaceEntriesTool.execute({
+      parentId: project.id,
+      offset: 2,
+      limit: 2,
+    })) as typeof first;
+    const items = [...first.items, ...second.items];
+    expect(items.map((item) => item.id)).toEqual([
+      nested.id,
+      join(path, 'lecture.txt'),
+      'source-1',
+    ]);
+    expect(items.every((item) => item.parentId === project.id && item.ref.id === item.id)).toBe(
+      true,
+    );
+    expect(first.total).toBe(3);
+    expect(first.nextOffset).toBe(2);
+    expect(second.nextOffset).toBeNull();
+    expect(state.readDirectories).toEqual([path, path]);
+  });
+
   it('批量读取 Git 忽略规则，保留反向规则与已跟踪文件，隐藏内部元数据', async () => {
     const git = await vi.importActual<typeof import('node:child_process')>('node:child_process');
     state.execFile.mockImplementation(git.execFile);
