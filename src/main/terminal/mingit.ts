@@ -183,6 +183,7 @@ async function downloadOnce(
   const timeout = setTimeout(() => controller.abort(new Error('连接超时')), CONNECT_TIMEOUT_MS);
   try {
     const response = await fetch(url, { signal: controller.signal, redirect: 'follow' });
+    clearTimeout(timeout);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const total = Number(response.headers.get('content-length')) || 0;
     const hash = createHash('sha256');

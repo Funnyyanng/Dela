@@ -36,6 +36,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   rmSync(state.root, { recursive: true, force: true });
@@ -104,4 +105,72 @@ it('Windows 仍使用 MinGit cmd 和 exe 搜索工具，以分号分隔', () => 
   expect(process.env.PATH).toBe(`${tools};${join(mingit, 'cmd')};C:\\Windows;C:\\custom`);
   runtime.prependRuntimePath();
   expect(process.env.PATH).toBe(`${tools};${join(mingit, 'cmd')};C:\\Windows;C:\\custom`);
+});
+
+it('下载响应开始后不再受连接超时限制，完整数据仍经过哈希校验', async () => {
+  vi.stubGlobal('process', { ...process, platform: 'win32' });
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: string, options: { signal: AbortSignal }) => {
+      signals.push(options.signal);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streams.push(controller);
+            options.signal.addEventListener('abort', () => controller.error(new Error('aborted')), {
+              once: true,
+            });
+          },
+        }),
+      );
+    }),
+  );
+  const install = runtime
+    .installMinGit({
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      onExtract: vi.fn(),
+    })
+    .catch((error: Error) => error);
+  await vi.waitFor(() => expect(streams).toHaveLength(1));
+  await vi.advanceTimersByTimeAsync(15_001);
+  expect(signals[0]?.aborted).toBe(false);
+  streams[0]!.enqueue(new TextEncoder().encode('complete test archive'));
+  streams[0]!.close();
+  await vi.waitFor(() => expect(streams).toHaveLength(2));
+  streams[1]!.enqueue(new TextEncoder().encode('complete test archive'));
+  streams[1]!.close();
+  const error = await install;
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain('SHA256 不符');
+});
+
+it('响应开始后的用户取消仍会停止下载，不重试备用源', async () => {
+  vi.stubGlobal('process', { ...process, platform: 'win32' });
+  const controller = new AbortController();
+  const fetch = vi.fn(
+    async (_url: string, options: { signal: AbortSignal }) =>
+      new Response(
+        new ReadableStream({
+          start(stream) {
+            options.signal.addEventListener('abort', () => stream.error(new Error('cancelled')), {
+              once: true,
+            });
+          },
+        }),
+      ),
+  );
+  vi.stubGlobal('fetch', fetch);
+  const install = runtime.installMinGit({
+    signal: controller.signal,
+    onProgress: vi.fn(),
+    onExtract: vi.fn(),
+  });
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+  controller.abort();
+  await expect(install).rejects.toThrow('已取消');
+  expect(fetch).toHaveBeenCalledOnce();
 });
