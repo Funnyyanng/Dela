@@ -10,6 +10,8 @@ import { availablePath, diskName, storageDirectory } from '../storage';
 import { latestTermOf } from '../../shared/canvas';
 import type { CachedCourseFile, CanvasExportResult } from '../../shared/canvas';
 import { pickCourseFiles, collectCourseFileEntries } from './course-files';
+import { boundCanvasFile } from './local-bindings';
+import type { CanvasQuizSummary } from '../../shared/canvas-local';
 import { officeExportPreviewInfo, readOfficeExportLink } from '../documents/links';
 import { classifyOfficeFile, officeZipMime } from '../documents/parse';
 import { loadCanvasToken, saveCanvasToken } from '../credentials';
@@ -410,12 +412,42 @@ export function getSource(id: string): StoredSource {
   return JSON.parse(stored.data);
 }
 
+export async function getCanvasQuizzes(courseId: number): Promise<CanvasQuizSummary[]> {
+  const quizzes = await list(`courses/${courseId}/quizzes?per_page=50`);
+  return quizzes.map((quiz) => ({
+    id: num(quiz.id),
+    title: str(quiz.title),
+    description: str(quiz.description),
+    dueAt: str(quiz.due_at) || null,
+    url: str(quiz.html_url),
+    assignmentId: num(quiz.assignment_id) || undefined,
+    updatedAt: str(quiz.updated_at) || null,
+  }));
+}
+
+export async function getCanvasAttachment(courseId: number, fileId: number): Promise<StoredSource> {
+  const attachment = row(await (await request(`courses/${courseId}/files/${fileId}`)).json());
+  if (num(attachment.id) !== fileId) throw new Error('Canvas 附件身份不匹配');
+  return {
+    id: `file:${fileId}`,
+    courseId,
+    kind: 'file',
+    fileId,
+    title: str(attachment.display_name) || str(attachment.filename) || `附件 ${fileId}`,
+    mime: str(attachment['content-type']),
+    size: num(attachment.size),
+    updatedAt: str(attachment.updated_at) || null,
+  };
+}
+
 const downloads = new Map<string, Promise<{ path: string; mime: string }>>();
 export function cachedFile(source: StoredSource): Promise<{ path: string; mime: string }> {
   const key = `${source.id}:${source.updatedAt ?? ''}`;
   const existing = downloads.get(key);
   if (existing) return existing;
-  const work = downloadFile(source).finally(() => downloads.delete(key));
+  const work = boundCanvasFile(source)
+    .then((local) => local ?? downloadFile(source))
+    .finally(() => downloads.delete(key));
   downloads.set(key, work);
   return work;
 }
@@ -501,6 +533,8 @@ async function downloadFile(source: StoredSource): Promise<{ path: string; mime:
   }
   mkdirSync(dir, { recursive: true });
   const metadata = row(await (await request(`files/${source.fileId}`)).json());
+  if (metadata.locked_for_user === true)
+    throw new Error(str(metadata.lock_explanation) || '该资料尚未对当前账号开放');
   const downloadUrl = new URL(str(metadata.url), origin);
   if (downloadUrl.origin !== origin) throw new Error('Canvas 下载地址无效');
   const first = await fetch(downloadUrl, {
@@ -516,8 +550,14 @@ async function downloadFile(source: StoredSource): Promise<{ path: string; mime:
       ![new URL(origin).hostname, 's3.jcloud.sjtu.edu.cn'].includes(target.hostname)
     )
       throw new Error('Canvas 下载重定向无效');
-    // Signed storage URL is a credential: never expose it or forward the Canvas Authorization header.
-    response = await fetch(target, { redirect: 'error', signal: AbortSignal.timeout(120000) });
+    // Canvas 的同源跳转仍需身份；对象存储签名地址不能接收 Canvas 凭据。
+    response = await fetch(target, {
+      ...(target.origin === origin
+        ? { headers: { Authorization: `Bearer ${loadCanvasToken()}` } }
+        : {}),
+      redirect: 'error',
+      signal: AbortSignal.timeout(120000),
+    });
   }
   if (!response.ok) throw new Error(`文件下载失败（HTTP ${response.status}）`);
   if (!response.body) throw new Error('文件下载没有返回内容');

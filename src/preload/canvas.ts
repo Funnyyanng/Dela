@@ -13,5 +13,9 @@ export const canvas = {
   openLink: (url: string) => invoke('canvas:open-link', url),
   cachedFiles: () => invoke('canvas:cached-files'),
   exportCourseFiles: (courseIds: number[]) => invoke('canvas:export-course-files', courseIds),
+  localSyncState: () => invoke('canvas:local-sync-state'),
+  configureLocalSync: (courseIds: number[], directory?: string) =>
+    invoke('canvas:configure-local-sync', courseIds, directory),
+  syncLocal: () => invoke('canvas:sync-local'),
   onState: (listener: (state: CanvasState) => void) => on<CanvasState>('canvas:state', listener),
 } satisfies CanvasApi;

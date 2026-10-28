@@ -194,7 +194,7 @@ app
     registerMailIpc();
     registerTimetableIpc();
     registerVsjtuIpc();
-    registerCanvasIpc();
+    registerCanvasIpc(invalidateSessions);
     registerShuiyuanIpc();
     registerAgentIpc();
     registerWorkspaceIpc(subscribeChat, invalidateSessions);

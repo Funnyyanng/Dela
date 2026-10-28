@@ -11,7 +11,10 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => ({ app: { getPath: () => 'C:\\data' } }));
 vi.mock('../../database', () => ({
   getDatabase: () => ({
-    prepare: () => ({ get: () => ({ name: '课题' }), all: () => [] }),
+    prepare: (sql: string) => ({
+      get: () => (sql.includes('FROM workspace_entries') ? { name: '课题' } : undefined),
+      all: () => [],
+    }),
   }),
 }));
 vi.mock('../../storage', () => ({ storageDirectory: () => 'C:\\data' }));

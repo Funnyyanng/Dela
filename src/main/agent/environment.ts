@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { getDatabase } from '../database';
 import { storageDirectory } from '../storage';
 import { getAgentInstruction } from '../settings/prefs';
+import { localCourseContext } from '../canvas/local-sync';
 import { remoteProjectOf } from '../workspace/api';
 import { remoteById, targetOf } from '../remotes/api';
 import { remoteTools } from '../remotes/operations';
@@ -131,7 +132,9 @@ export function agentEnvironment() {
       // 项目级 Skill：.agents/skills 与 .pi/skills 由 Pi 按 cwd 自己发现，.agent/skills 由 Dela 补上。
       const projectSkillDirs = extraProjectSkillDirs(cwd);
       return {
-        appendSystemPrompt: [DELA_PROMPT, ...shared],
+        appendSystemPrompt: [DELA_PROMPT, ...shared, localCourseContext(cwd)].filter(
+          (part): part is string => Boolean(part),
+        ),
         shellPath: locateBash(),
         commandPrefix: `export DELA_COMMAND_URL='${handle.url}' DELA_COMMAND_TOKEN='${handle.token}'\n${COMMAND_BRIDGE}`,
         skillPaths: [builtinSkillsDirectory(), ...projectSkillDirs],

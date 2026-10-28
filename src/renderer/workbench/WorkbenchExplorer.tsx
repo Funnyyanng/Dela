@@ -35,6 +35,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import { ProjectFileTree, type EntryAction } from '../navigation/ProjectFileTree';
 import { CanvasExportDialog } from './CanvasExportDialog';
+import { CanvasLocalSyncDialog } from './CanvasLocalSyncDialog';
 import type { ExplorerPending } from '../components/ui/explorer';
 import type { WorkspaceEntry } from '../../shared/api';
 import { useRemoteActivity } from '../navigation/remote-activity';
@@ -133,6 +134,7 @@ export function WorkbenchExplorer({
   const drawerRef = useRef<HTMLElement>(null);
   const [bySource, setBySource] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [localSyncOpen, setLocalSyncOpen] = useState(false);
   // 课程资料只在通用（无项目）工作台显示（承接旧资料页），且默认展开；项目工作台不渲染课程资料。
   const [coursesOpen, setCoursesOpen] = useState(() => projectId === null);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -561,6 +563,13 @@ export function WorkbenchExplorer({
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           disabled={!canvas.connected}
+                          onSelect={() => setLocalSyncOpen(true)}
+                        >
+                          <Folder />
+                          同步本地课程
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={!canvas.connected}
                           onSelect={() => setExportOpen(true)}
                         >
                           <Download />
@@ -691,6 +700,7 @@ export function WorkbenchExplorer({
         />
       )}
       {exportOpen && <CanvasExportDialog onClose={() => setExportOpen(false)} open />}
+      {localSyncOpen && <CanvasLocalSyncDialog onClose={() => setLocalSyncOpen(false)} />}
     </>
   );
 }

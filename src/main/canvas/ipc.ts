@@ -20,8 +20,9 @@ import {
   archiveCanvasCourse,
 } from './api';
 import type { CanvasState } from '../../shared/api';
+import { configureLocalCanvasSync, getLocalCanvasSyncState, syncLocalCanvas } from './local-sync';
 
-export function registerCanvasIpc() {
+export function registerCanvasIpc(invalidateSessions: () => void = () => {}) {
   const handle = (name: string, fn: (...args: unknown[]) => unknown) =>
     ipcMain.handle(`canvas:${name}`, (event, ...args) => {
       checkWorkspaceSender(event);
@@ -62,6 +63,32 @@ export function registerCanvasIpc() {
     if (!openShuiyuanLinkInApp(url.href)) await shell.openExternal(url.href);
   });
   handle('cached-files', () => cachedCourseFiles());
+  handle('local-sync-state', getLocalCanvasSyncState);
+  handle('configure-local-sync', async (ids, root) => {
+    const courseIds = z.array(z.number().int().positive()).min(1).max(100).parse(ids);
+    let directory = z.string().min(1).max(32767).optional().parse(root);
+    if (!directory) {
+      const picked = await dialog.showOpenDialog({
+        title: '选择本学期课程文件夹',
+        properties: ['openDirectory'],
+      });
+      if (picked.canceled || !picked.filePaths[0]) return null;
+      directory = picked.filePaths[0];
+    }
+    const previous = getLocalCanvasSyncState();
+    const state = configureLocalCanvasSync(directory, courseIds);
+    if (
+      previous?.root !== state.root ||
+      JSON.stringify(previous.courses) !== JSON.stringify(state.courses)
+    )
+      invalidateSessions();
+    return state;
+  });
+  handle('sync-local', async () => {
+    const result = await syncLocalCanvas();
+    broadcastCanvasState();
+    return result;
+  });
   handle('export-course-files', async (ids) => {
     const courseIds = z.array(z.number().int().positive()).min(1).parse(ids);
     const { canceled, filePaths } = await dialog.showOpenDialog({
