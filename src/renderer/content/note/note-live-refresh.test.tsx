@@ -87,3 +87,26 @@ it('外部写入不覆盖未保存草稿，并沿用冲突提示', async () => {
   expect(container.querySelector('[role="alert"]')?.textContent).toContain('草稿仍在');
   expect(useNoteDrafts.getState().drafts[key]?.content.revision).toBe('r1');
 });
+
+it('阅读预览显示当前未保存草稿，返回编辑时不重载或改写正文', async () => {
+  await open();
+  const acquire = vi.spyOn(source, 'acquire');
+  const edit = vi.spyOn(source, 'edit');
+  const save = vi.spyOn(source, 'save');
+  await act(async () => useNoteDrafts.getState().edit(key, '# 未保存的标题\n\n**我的修改**'));
+
+  const preview = container.querySelector<HTMLButtonElement>('button[aria-label="阅读预览"]')!;
+  await act(async () => preview.click());
+  expect(container.querySelector('h1')?.textContent).toBe('未保存的标题');
+  expect(container.querySelector('[data-streamdown="strong"]')?.textContent).toBe('我的修改');
+  expect(container.querySelector('[aria-label="Markdown 阅读预览"]')).not.toBeNull();
+
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="返回编辑"]')!.click(),
+  );
+  expect(container.querySelector('pre')?.textContent).toBe('# 未保存的标题\n\n**我的修改**');
+  expect(useNoteDrafts.getState().drafts[key]?.saved).toBe('old');
+  expect(acquire).not.toHaveBeenCalled();
+  expect(edit).not.toHaveBeenCalled();
+  expect(save).not.toHaveBeenCalled();
+});

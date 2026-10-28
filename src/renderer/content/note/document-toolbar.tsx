@@ -1,11 +1,19 @@
-import { ChevronRight, Clock, Code, FolderOpen, LoaderCircle, RefreshCw } from 'lucide-react';
+import {
+  ChevronRight,
+  Clock,
+  Code,
+  Eye,
+  FolderOpen,
+  LoaderCircle,
+  Pencil,
+  RefreshCw,
+} from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/utils';
 
-/** Markdown 编辑模式（本次会话内按文档记忆）：即时渲染或纯源码，两者编辑的都是同一份原文。 */
-export type NoteMode = 'live' | 'source';
+export type NoteMode = 'live' | 'source' | 'preview';
 
-/** 文件内容级工具栏：保存状态低干扰展示、即时渲染/源码切换、文件夹定位与重载。
+/** 文件内容级工具栏：保存状态低干扰展示、阅读/编辑/源码切换、文件夹定位与重载。
  *  正常状态不常驻保存按钮（自动保存已覆盖该路径）；失败重试与「另存为新笔记」入口在 NoteTab 错误条。 */
 export function DocumentToolbar({
   path,
@@ -20,7 +28,7 @@ export function DocumentToolbar({
   onReload,
 }: {
   path: string[];
-  /** Markdown 才有即时渲染/源码切换；其他文本始终是代码编辑器。 */
+  /** Markdown 才有阅读/编辑/源码切换；其他文本始终是代码编辑器。 */
   markdown: boolean;
   mode: NoteMode;
   onModeChange: (mode: NoteMode) => void;
@@ -77,6 +85,19 @@ export function DocumentToolbar({
         ) : /* 正常态不常驻「已保存」图标：长期占位无信息增量；失败详情由 NoteTab 错误条承载。 */
         null}
       </span>
+      {markdown && (
+        <Button
+          size="sm"
+          variant={mode === 'preview' ? 'secondary' : 'ghost'}
+          title={mode === 'preview' ? '返回编辑' : '阅读预览'}
+          aria-label={mode === 'preview' ? '返回编辑' : '阅读预览'}
+          aria-pressed={mode === 'preview'}
+          onClick={() => onModeChange(mode === 'preview' ? 'live' : 'preview')}
+        >
+          {mode === 'preview' ? <Pencil /> : <Eye />}
+          {mode === 'preview' ? '编辑' : '预览'}
+        </Button>
+      )}
       {markdown && (
         <Button
           size="icon-xs"

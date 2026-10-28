@@ -9,6 +9,7 @@ import { decodeAssetPath, isRelativeAssetPath, noteAssetUrl } from '../../../sha
 import { DocumentToolbar, type NoteMode } from './document-toolbar';
 import { useNoteDraftSource } from './draft-source';
 import { MarkdownEditor } from './MarkdownEditor';
+import { MarkdownPreview } from './MarkdownPreview';
 import { markdownImageInsert } from './live-preview';
 import { dialogOverlay, dialogPanel } from '../../components/ui/motion';
 import { cn } from '../../lib/utils';
@@ -217,25 +218,34 @@ export function NoteTab({ tabId, groupId }: { tabId: TabId; groupId: string }) {
           文件超过 1 MB，这里只读显示开头部分。要编辑完整内容请用外部编辑器打开。
         </p>
       )}
-      {/* 模式切换换一个编辑器实例（key 不同）：即时渲染与源码各自保留撤销历史与光标。 */}
-      <MarkdownEditor
-        key={markdown ? mode : 'code'}
-        value={draft.text}
-        filename={draft.content.title}
-        editorStateKey={`document:${entryId}:${groupId}:${markdown ? mode : 'code'}`}
-        scroll={scrollMemory.get(scrollKey) ?? 0}
-        readOnly={readOnly}
-        livePreview={
-          markdown && mode === 'live'
-            ? (src) =>
-                isRelativeAssetPath(src) ? noteAssetUrl(entryId, decodeAssetPath(src)) : src
-            : undefined
-        }
-        extensions={markdown && !readOnly ? [imageInsert(entryId)] : []}
-        onChange={(text) => source.edit(entryId, text)}
-        onSave={() => void source.save(entryId)}
-        onScroll={(top) => scrollMemory.set(scrollKey, top)}
-      />
+      {markdown && mode === 'preview' ? (
+        <MarkdownPreview
+          key={`${entryId}:${groupId}`}
+          entryId={entryId}
+          value={draft.text}
+          scroll={scrollMemory.get(`${scrollKey}:preview`) ?? 0}
+          onScroll={(top) => scrollMemory.set(`${scrollKey}:preview`, top)}
+        />
+      ) : (
+        <MarkdownEditor
+          key={markdown ? mode : 'code'}
+          value={draft.text}
+          filename={draft.content.title}
+          editorStateKey={`document:${entryId}:${groupId}:${markdown ? mode : 'code'}`}
+          scroll={scrollMemory.get(scrollKey) ?? 0}
+          readOnly={readOnly}
+          livePreview={
+            markdown && mode === 'live'
+              ? (src) =>
+                  isRelativeAssetPath(src) ? noteAssetUrl(entryId, decodeAssetPath(src)) : src
+              : undefined
+          }
+          extensions={markdown && !readOnly ? [imageInsert(entryId)] : []}
+          onChange={(text) => source.edit(entryId, text)}
+          onSave={() => void source.save(entryId)}
+          onScroll={(top) => scrollMemory.set(scrollKey, top)}
+        />
+      )}
       <Dialog.Root onOpenChange={setConfirmReload} open={confirmReload}>
         <Dialog.Portal>
           <Dialog.Overlay className={dialogOverlay} />
