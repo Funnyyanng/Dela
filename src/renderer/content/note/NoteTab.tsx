@@ -73,8 +73,21 @@ export function NoteTab({ tabId, groupId }: { tabId: TabId; groupId: string }) {
     // 笔记文件可能被外部编辑：窗口聚焦时强制重读（同样不覆盖未保存草稿）。
     const refreshLocal = () => refresh(true);
     window.addEventListener('focus', refreshLocal);
+    const unsubscribe = source.onFileChanged?.(entryId, () => {
+      if (source.refresh)
+        void source.refresh(entryId).then(
+          () => {
+            if (active) setError(null);
+          },
+          (cause) => {
+            if (active) setError(errorText(cause));
+          },
+        );
+      else refresh(true);
+    });
     return () => {
       active = false;
+      unsubscribe?.();
       window.removeEventListener('focus', refreshLocal);
       // 卸载即释放引用：草稿先冲盘，最后一个引用才移除（note/drafts 语义）。
       void source.release(entryId);

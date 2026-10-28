@@ -6,6 +6,7 @@ import type { TabId } from '../../shared/layout';
 import { isRelativeAssetPath, noteAssetUrl } from '../../shared/note-files';
 import { parseRemoteNodeId, remoteAssetUrl } from '../../shared/remotes';
 import type { ResourceRef } from '../../shared/resources';
+import { workspacePathAffected } from '../../shared/workspace';
 // Provider 均取自轻量叶子模块：barrel 会连带重依赖标签组件（Streamdown/CodeMirror/
 // highlight.js），静态引入会让 registry 的懒加载分包失效。
 import {
@@ -52,6 +53,18 @@ function tabDocumentKey(tabId: TabId | null): string | null {
  *  模块级函数引用稳定，不破坏 SplitNode/TabGroup 的 memo 比较。 */
 function newChatInCurrentPool() {
   void useNavigationStore.getState().newChat(useWorkbenchLayout.getState().projectId);
+}
+
+function watchLocalFile(entryId: string, listener: () => void): () => void {
+  return (
+    window.dela?.workspace.onFileChanged?.((paths) => {
+      const entry = useWorkspaceStore
+        .getState()
+        .workspace.entries.find((item) => item.id === entryId);
+      if (entry?.remoteId || entry?.kind === 'source') return;
+      if (paths.some((path) => workspacePathAffected(entry?.path ?? entryId, path))) listener();
+    }) ?? (() => {})
+  );
 }
 
 export function WorkbenchShell({ home = false }: { home?: boolean }) {
@@ -212,6 +225,8 @@ export function WorkbenchShell({ home = false }: { home?: boolean }) {
       },
       useDraft: (entryId) => useNoteDrafts((state) => state.drafts[entryId]),
       acquire: (key, force) => useNoteDrafts.getState().acquire(key, force),
+      refresh: (key) => useNoteDrafts.getState().refresh(key),
+      onFileChanged: watchLocalFile,
       release: (key) => useNoteDrafts.getState().release(key),
       edit: (key, text) => {
         // 改过的文件不再是「只是看看」：预览标签转常驻，不会被下一次单击替换掉。
@@ -290,6 +305,10 @@ export function WorkbenchShell({ home = false }: { home?: boolean }) {
     };
     return {
       loadDocument,
+      onFileChanged: (tabKey, listener) => {
+        const target = parsePreviewTabId(tabKey);
+        return target && 'entryId' in target ? watchLocalFile(target.entryId, listener) : () => {};
+      },
       openLink: (url) => {
         try {
           const parsed = new URL(url);

@@ -59,20 +59,24 @@ export function PreviewTab({ tabId, groupId }: { tabId: TabId; groupId: string }
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const scrollContainer = useRef<HTMLDivElement>(null);
   const docRef = useRef<LoadedDocument | null>(null);
+  const loadSequence = useRef(0);
   docRef.current = doc;
   const scrollKey = `${tabId}:${groupId}`;
   const scroll = scrollMemory.get(scrollKey) ?? 0;
   const onScroll = (top: number) => scrollMemory.set(scrollKey, top);
 
   const load = () => {
+    const sequence = ++loadSequence.current;
     // 首次加载失败用占位错误（带重试）；已加载后的重读失败走浮窗，不打断当前内容。
     const initial = docRef.current === null;
     void loader.loadDocument(tabId).then(
       (result) => {
+        if (sequence !== loadSequence.current) return;
         setDoc(result);
         setError(null);
       },
       (cause) => {
+        if (sequence !== loadSequence.current) return;
         if (initial) setError(errorText(cause));
         else
           showToast({
@@ -92,7 +96,12 @@ export function PreviewTab({ tabId, groupId }: { tabId: TabId; groupId: string }
       if (docRef.current?.watchesDisk) load();
     };
     window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
+    const unsubscribe = loader.onFileChanged?.(tabId, load);
+    return () => {
+      ++loadSequence.current;
+      unsubscribe?.();
+      window.removeEventListener('focus', onFocus);
+    };
   }, [tabId, loader]);
 
   const content = doc?.content;

@@ -29,6 +29,16 @@ export function relocateWorkspacePath(path: string, from: string, to: string): s
   return path;
 }
 
+export function workspacePathAffected(path: string, changed: string): boolean {
+  const normalize = (value: string) =>
+    /^(?:[a-z]:[\\/]|\\\\)/i.test(value)
+      ? value.replaceAll('\\', '/').toLowerCase().replace(/\/$/, '')
+      : value.replace(/\/$/, '');
+  path = normalize(path);
+  changed = normalize(changed);
+  return path === changed || path.startsWith(`${changed}/`);
+}
+
 export interface WorkspaceEntry {
   gitIgnored?: boolean;
   id: string;
@@ -73,6 +83,7 @@ export interface WorkspaceApi {
     input: { name?: string; parentId?: string | null; kind?: 'folder' | 'project' },
   ): Promise<WorkspaceEntryUpdate>;
   onChanged(listener: (paths: string[]) => void): () => void;
+  onFileChanged(listener: (paths: string[]) => void): () => void;
   remove(id: string): Promise<void>;
   read(id: string): Promise<DocumentContent>;
   /** 原地覆写文本文件；revision 与磁盘不一致时拒绝。 */

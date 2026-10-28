@@ -13,6 +13,7 @@ export const workspace = {
   localReferenceFiles: (cwd: string) => invoke('workspace:local-reference-files', cwd),
   localAncestors: (id: string) => invoke('workspace:local-ancestors', id),
   onChanged: (listener: (paths: string[]) => void) => on('workspace:changed', listener),
+  onFileChanged: (listener: (paths: string[]) => void) => on('workspace:file-changed', listener),
   create: (input: WorkspaceCreateInput) => invoke('workspace:create', input),
   update: (
     id: string,

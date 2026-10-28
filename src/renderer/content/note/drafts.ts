@@ -16,7 +16,8 @@ export type NoteDraft = {
 type Store = {
   drafts: Record<string, NoteDraft>;
   /** 读取（或复用）一份草稿；force 时先等在途保存结束再重读，不新增引用计数。 */
-  acquire: (key: string, force?: boolean) => Promise<void>;
+  acquire: (key: string, force?: boolean, preserveDraft?: boolean) => Promise<void>;
+  refresh: (key: string) => Promise<void>;
   /** Flush a draft before releasing it. False means it is still present and dirty. */
   release: (key: string) => Promise<boolean>;
   edit: (key: string, text: string) => void;
@@ -50,7 +51,8 @@ export const useNoteDrafts = create<Store>((set, get) => ({
     }
     set({ drafts });
   },
-  acquire: async (key, force = false) => {
+  refresh: (key) => get().acquire(key, true, true),
+  acquire: async (key, force = false, preserveDraft = false) => {
     // force 语义是「强制重读磁盘」而非新持有入口（NoteTab 窗口聚焦刷新、App 会话终态
     // 刷新都复用它且无配对 release）：不计数，否则草稿被永久持有、重开时复用过期快照。
     if (!force) refcounts.set(key, (refcounts.get(key) ?? 0) + 1);
@@ -60,7 +62,11 @@ export const useNoteDrafts = create<Store>((set, get) => ({
       if (!pending || !(await pending)) return;
     }
     const pending = loading.get(key);
-    if (pending) return pending;
+    if (pending) {
+      await pending;
+      if (force) return get().acquire(key, true, preserveDraft);
+      return;
+    }
     const started = get().drafts[key];
     const work = (async () => {
       const api = window.dela!;
@@ -82,6 +88,21 @@ export const useNoteDrafts = create<Store>((set, get) => ({
           current.saving)
       )
         return;
+      if (preserveDraft && current) {
+        if (current.content.revision === content.revision) return;
+        if (current.text !== current.saved) {
+          set((s) => ({
+            drafts: {
+              ...s.drafts,
+              [key]: {
+                ...current,
+                error: '文件已在外部修改。你的草稿仍在，请另存或重新载入后编辑。',
+              },
+            },
+          }));
+          return;
+        }
+      }
       set((s) => ({
         drafts: {
           ...s.drafts,

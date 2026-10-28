@@ -51,6 +51,7 @@ const watchers = new Map<string, FSWatcher>();
 const subscribers = new Set<WebContents>();
 let changedTimer: ReturnType<typeof setTimeout> | undefined;
 const changedPaths = new Set<string>();
+const changedFiles = new Set<string>();
 /** @ 候选上限：超长索引没有实用价值，还会拖慢 composer。 */
 const REMOTE_REFERENCE_LIMIT = 3000;
 /** 一次能报上去的监视目录数：真到这么多层说明树已经展开得很深，此时 inotify 额度也不宽裕。 */
@@ -63,6 +64,7 @@ function watchWorkspace(client: WebContents, state: WorkspaceState) {
       if (!subscribers.size) {
         clearTimeout(changedTimer);
         changedPaths.clear();
+        changedFiles.clear();
         for (const watcher of watchers.values()) watcher.close();
         watchers.clear();
       }
@@ -100,12 +102,10 @@ function watchWorkspace(client: WebContents, state: WorkspaceState) {
     if (watchers.has(root)) continue;
     try {
       const watcher = watch(root, { recursive: true, persistent: false }, (event, file) => {
-        // 目录清单不含内容或 mtime；内容写入不应使整棵树和引用候选失效。
         const ignoreRules =
           file &&
           (basename(String(file)) === '.gitignore' ||
             /\.git[\\/]info[\\/]exclude$/.test(String(file)));
-        if (event === 'change' && !ignoreRules) return;
         if (
           file &&
           !ignoreRules &&
@@ -114,13 +114,20 @@ function watchWorkspace(client: WebContents, state: WorkspaceState) {
             .some((part) => part === '.git' || part === 'node_modules')
         )
           return;
-        changedPaths.add(file ? join(root, String(file)) : root);
+        const path = file ? join(root, String(file)) : root;
+        changedFiles.add(path);
+        if (event !== 'change' || ignoreRules) changedPaths.add(path);
         clearTimeout(changedTimer);
         changedTimer = setTimeout(() => {
           const paths = [...changedPaths];
+          const files = [...changedFiles];
           changedPaths.clear();
+          changedFiles.clear();
           for (const subscriber of subscribers)
-            if (!subscriber.isDestroyed()) subscriber.send('workspace:changed', paths);
+            if (!subscriber.isDestroyed()) {
+              if (paths.length) subscriber.send('workspace:changed', paths);
+              subscriber.send('workspace:file-changed', files);
+            }
         }, 200);
       });
       watcher.on('error', () => {

@@ -20,6 +20,8 @@ export interface NoteDraftSource {
   useDraft(entryId: string): NoteDraft | undefined;
   /** 建立或刷新草稿；force 时等在途保存结束后重读磁盘。 */
   acquire(entryId: string, force?: boolean): Promise<void>;
+  refresh?(entryId: string): Promise<void>;
+  onFileChanged?(entryId: string, listener: () => void): () => void;
   /** 修改正文（进入防抖自动保存队列）。 */
   edit(entryId: string, text: string): void;
   /** 立即保存；干净（或已干净）时 resolve true。 */

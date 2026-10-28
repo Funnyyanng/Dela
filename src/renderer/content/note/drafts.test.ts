@@ -155,6 +155,81 @@ describe('draft save mutex', () => {
 });
 
 describe('draft acquire', () => {
+  it('refreshes each AI write without waiting for the session to finish', async () => {
+    let disk = { ...content };
+    installDela(
+      async () => ({ ...disk }),
+      async () => 'saved',
+    );
+    const store = useNoteDrafts.getState();
+    await store.acquire('ai-steps');
+    disk = { ...content, text: 'step one', revision: 'r2' };
+    await store.refresh('ai-steps');
+    expect(useNoteDrafts.getState().drafts['ai-steps']?.text).toBe('step one');
+    disk = { ...content, text: 'step two', revision: 'r3' };
+    await store.refresh('ai-steps');
+    expect(useNoteDrafts.getState().drafts['ai-steps']).toMatchObject({
+      text: 'step two',
+      saved: 'step two',
+      error: null,
+    });
+  });
+
+  it('keeps dirty text and its revision when the disk changes', async () => {
+    let disk = { ...content };
+    installDela(
+      async () => ({ ...disk }),
+      async () => {
+        throw new Error('文件已在外部修改');
+      },
+    );
+    const store = useNoteDrafts.getState();
+    await store.acquire('external-dirty');
+    store.edit('external-dirty', 'my draft');
+    disk = { ...content, text: 'AI version', revision: 'r2' };
+    await store.refresh('external-dirty');
+    expect(useNoteDrafts.getState().drafts['external-dirty']).toMatchObject({
+      text: 'my draft',
+      saved: 'old',
+      content: { revision: 'r1' },
+      error: expect.stringContaining('草稿仍在'),
+    });
+    await expect(store.save('external-dirty')).resolves.toBe(false);
+    expect(useNoteDrafts.getState().drafts['external-dirty']?.text).toBe('my draft');
+  });
+
+  it('ignores a self-save notification while the disk revision still matches', async () => {
+    installDela(
+      async () => ({ ...content }),
+      async () => 'r2',
+    );
+    const store = useNoteDrafts.getState();
+    await store.acquire('unchanged');
+    store.edit('unchanged', 'my next edit');
+    const before = useNoteDrafts.getState().drafts['unchanged'];
+    await store.refresh('unchanged');
+    expect(useNoteDrafts.getState().drafts['unchanged']).toBe(before);
+    expect(before?.error).toBeNull();
+  });
+
+  it('reads again when another disk change arrives during an in-flight refresh', async () => {
+    const finishes: ((value: typeof content) => void)[] = [];
+    const { readMock } = installDela(
+      () => new Promise((resolve) => finishes.push(resolve)),
+      async () => 'r2',
+    );
+    const store = useNoteDrafts.getState();
+    const opening = store.acquire('overlapping-writes');
+    const refresh = store.refresh('overlapping-writes');
+    finishes.shift()!({ ...content });
+    await opening;
+    await Promise.resolve();
+    expect(readMock).toHaveBeenCalledTimes(2);
+    finishes.shift()!({ ...content, text: 'latest disk', revision: 'r3' });
+    await refresh;
+    expect(useNoteDrafts.getState().drafts['overlapping-writes']?.text).toBe('latest disk');
+  });
+
   it('shares one in-flight load and reuses the existing draft on later acquires', async () => {
     let pending!: (value: typeof content) => void;
     const { readMock } = installDela(

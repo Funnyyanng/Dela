@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { relocateWorkspacePath } from './workspace';
+import { relocateWorkspacePath, workspacePathAffected } from './workspace';
+
+describe('workspacePathAffected', () => {
+  it('只匹配变更文件本身或无文件名通知的目录根，不匹配同前缀路径', () => {
+    expect(workspacePathAffected('/courses/a/note.md', '/courses/a/note.md')).toBe(true);
+    expect(workspacePathAffected('/courses/a/note.md', '/courses/a/')).toBe(true);
+    expect(workspacePathAffected('/courses/a/note.md', '/')).toBe(true);
+    expect(workspacePathAffected('/courses/ab/note.md', '/courses/a')).toBe(false);
+    expect(workspacePathAffected('/courses/a/note.md', '/courses/a/other.md')).toBe(false);
+    expect(workspacePathAffected('/courses/A/note.md', '/courses/a/note.md')).toBe(false);
+    expect(workspacePathAffected('/courses/a\\note.md', '/courses/a')).toBe(false);
+  });
+
+  it('Windows 路径兼容分隔符与大小写，UNC 路径同样匹配', () => {
+    expect(workspacePathAffected('C:\\Courses\\note.md', 'c:/courses/NOTE.md')).toBe(true);
+    expect(workspacePathAffected('\\\\server\\share\\note.md', '//server/share/')).toBe(true);
+    expect(workspacePathAffected('C:/courses/other.md', 'C:\\courses\\note.md')).toBe(false);
+  });
+});
 
 describe('relocateWorkspacePath', () => {
   it('移动 POSIX 子树时保留文件名中的反斜杠，不改同前缀的兄弟文件', () => {
