@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { workspaceArchiveId, type WorkspaceEntry } from '../../shared/api';
-import { hiddenWorkspaceNames } from '../../shared/workspace';
+import { isHiddenWorkspaceName } from '../../shared/workspace';
 import { Explorer, type ExplorerItem, type ExplorerPending } from '../components/ui/explorer';
 import { ShuiyuanIcon } from '../components/ui/shuiyuan-icon';
 import {
@@ -199,11 +199,7 @@ export function ProjectFileTree({
     const pending = [rootId];
     while (pending.length) {
       for (const entry of children.get(pending.pop()!) ?? []) {
-        if (
-          excluded.has(entry.id) ||
-          included.has(entry.id) ||
-          hiddenWorkspaceNames.has(entry.name)
-        )
+        if (excluded.has(entry.id) || included.has(entry.id) || isHiddenWorkspaceName(entry.name))
           continue;
         included.add(entry.id);
         pending.push(entry.id);

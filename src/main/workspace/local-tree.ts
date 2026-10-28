@@ -6,7 +6,7 @@ import { storageDirectory } from '../storage';
 import { entry, prepareStorage, remoteProjectOf } from './api';
 import {
   workspaceArchiveId,
-  hiddenWorkspaceNames,
+  isHiddenWorkspaceName,
   type WorkspaceEntry,
   type WorkspaceState,
 } from '../../shared/workspace';
@@ -71,7 +71,7 @@ async function readDirectory(path: string, parentId: string | null, stored: Work
   const children = await readdir(path, { withFileTypes: true });
   const entries: WorkspaceEntry[] = [];
   for (const child of children) {
-    if (hiddenWorkspaceNames.has(child.name)) continue;
+    if (isHiddenWorkspaceName(child.name)) continue;
     if (child.isSymbolicLink() || (!child.isDirectory() && !child.isFile())) continue;
     const file = join(path, child.name);
     const identity = identities.get(file);
@@ -218,7 +218,7 @@ export async function searchLocalWorkspace(
   while (pending.length) {
     if (signal?.aborted) return [];
     const { item, ancestors } = pending.pop()!;
-    if (seen.has(item.id) || item.remoteId || hiddenWorkspaceNames.has(item.name)) continue;
+    if (seen.has(item.id) || item.remoteId || isHiddenWorkspaceName(item.name)) continue;
     seen.add(item.id);
     if (item.name.toLocaleLowerCase().includes(needle)) {
       for (const parent of ancestors) found.set(parent.id, parent);

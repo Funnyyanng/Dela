@@ -226,6 +226,32 @@ describe('磁盘工作区', () => {
         ?.gitIgnored,
     ).toBe(false);
   });
+  it('课程后台记录不进入目录和引用候选，原文件仍可直接读取', async () => {
+    const project = createWorkspaceEntry({ parentId: null, name: 'courses', kind: 'project' });
+    const cwd = localPathOf(project.id);
+    const layout = '{"course_directories":{"9":"课程"}}';
+    writeFileSync(join(cwd, '.canvas-layout.json'), layout);
+    writeFileSync(join(cwd, '.canvas-9-files.json'), '[]');
+    mkdirSync(join(cwd, '.obsidian'));
+    writeFileSync(join(cwd, '.obsidian', 'workspace.json'), '{}');
+    const visible = ['.env', '.gitignore', '资料.json', 'Canvas测试总览.md'];
+    for (const name of visible) writeFileSync(join(cwd, name), '');
+    const listed = (await listLocalDirectory(project.id)).map((item) => item.name);
+    expect(listed).toEqual(expect.arrayContaining(visible));
+    expect(listed.some((name) => name.startsWith('.canvas-') || name === '.obsidian')).toBe(false);
+    const references = await searchLocalWorkspace(project.id, '');
+    expect(
+      references.some(
+        (item) => item.name.startsWith('.canvas-') || item.path?.includes('.obsidian'),
+      ),
+    ).toBe(false);
+    expect((await searchLocalWorkspace(project.id, 'canvas')).map((item) => item.name)).toContain(
+      'Canvas测试总览.md',
+    );
+    expect((await readWorkspaceEntry(join(cwd, '.canvas-layout.json'))).text).toBe(layout);
+    expect(readFileSync(join(cwd, '.canvas-9-files.json'), 'utf8')).toBe('[]');
+  });
+
   it('目录概览不扫描项目后代，逐层加载与独立搜索保留深层文件', async () => {
     const project = createWorkspaceEntry({ parentId: null, name: 'large', kind: 'project' });
     const deep = join(localPathOf(project.id), 'src', 'nested');

@@ -55,7 +55,18 @@ export interface WorkspaceEntry {
 
 export const workspaceArchiveId = '00000000-0000-4000-8000-000000000001';
 
-export const hiddenWorkspaceNames = new Set(['.git', '.svn', '.hg', '.DS_Store', 'Thumbs.db']);
+export const hiddenWorkspaceNames = new Set([
+  '.git',
+  '.svn',
+  '.hg',
+  '.DS_Store',
+  'Thumbs.db',
+  '.obsidian',
+]);
+
+export function isHiddenWorkspaceName(name: string): boolean {
+  return hiddenWorkspaceNames.has(name) || /^\.canvas-.*\.json$/.test(name);
+}
 
 export interface WorkspaceState {
   entries: WorkspaceEntry[];
