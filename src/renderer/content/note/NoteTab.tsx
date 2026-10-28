@@ -52,6 +52,7 @@ export function NoteTab({ tabId, groupId }: { tabId: TabId; groupId: string }) {
   const path = source.usePath?.(entryId ?? '');
   const [error, setError] = useState<string | null>(null);
   const [confirmReload, setConfirmReload] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [mode, setMode] = useState<NoteMode>(() =>
     entryId !== null ? (noteModes.get(entryId) ?? 'live') : 'live',
   );
@@ -151,6 +152,18 @@ export function NoteTab({ tabId, groupId }: { tabId: TabId; groupId: string }) {
     setMode(next);
   };
   const dirty = draft.text !== draft.saved;
+  const exportPdf = async () => {
+    setExporting(true);
+    try {
+      if (!window.dela) throw new Error('仅桌面应用支持导出 PDF');
+      const target = await window.dela.workspace.exportMarkdownPdf(entryId, draft.text);
+      if (target) showToast({ variant: 'success', title: 'PDF 已导出', description: target });
+    } catch (cause) {
+      showToast({ variant: 'error', title: '导出 PDF 失败', description: errorText(cause) });
+    } finally {
+      setExporting(false);
+    }
+  };
   const runReload = () => {
     setError(null);
     void source.acquire(entryId, true).catch((cause) => setError(errorText(cause)));
@@ -181,6 +194,9 @@ export function NoteTab({ tabId, groupId }: { tabId: TabId; groupId: string }) {
         dirty={dirty}
         failed={draft.error !== null || error !== null}
         dueAt={draft.content.dueAt}
+        onExportPdf={() => void exportPdf()}
+        exporting={exporting}
+        exportDisabled={draft.content.truncated === true}
         onOpenInFolder={openInFolder}
         onReload={() => {
           // 有未保存草稿时先经应用内确认（与移除内容等危险操作一致），不用系统原生弹窗。

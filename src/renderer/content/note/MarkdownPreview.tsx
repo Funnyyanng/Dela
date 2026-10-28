@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useLayoutEffect, useMemo, useRef, type ComponentProps } from 'react';
 import { defaultRehypePlugins } from 'streamdown';
 import { decodeAssetPath, isRelativeAssetPath, noteAssetUrl } from '../../../shared/note-files';
 import { ChatMarkdown } from '../chat/markdown';
@@ -15,11 +15,15 @@ export function MarkdownPreview({
   value,
   scroll,
   onScroll,
+  plugins,
+  controls,
 }: {
   entryId: string;
   value: string;
   scroll: number;
   onScroll: (top: number) => void;
+  plugins?: ComponentProps<typeof ChatMarkdown>['plugins'];
+  controls?: ComponentProps<typeof ChatMarkdown>['controls'];
 }) {
   const host = useRef<HTMLDivElement>(null);
   const rehypePlugins = useMemo(() => {
@@ -55,6 +59,8 @@ export function MarkdownPreview({
       <ChatMarkdown
         className="mx-auto max-w-[60rem] break-words text-sm leading-7 text-ink [&_h1]:mt-0 [&_h1]:mb-6 [&_h1]:text-2xl [&_h2]:mt-8 [&_h2]:mb-3 [&_h2]:text-xl [&_h3]:mt-6 [&_h3]:text-lg [&_img]:max-w-full [&_table]:text-sm"
         rehypePlugins={rehypePlugins}
+        plugins={plugins}
+        controls={controls}
       >
         {value}
       </ChatMarkdown>

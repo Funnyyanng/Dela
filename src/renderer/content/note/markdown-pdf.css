@@ -1,0 +1,101 @@
+@page markdown-export {
+  size: A4;
+  margin: 16mm 18mm;
+}
+
+main[data-markdown-pdf] {
+  page: markdown-export;
+  width: 174mm;
+  max-width: 100%;
+}
+
+html[data-markdown-pdf],
+html[data-markdown-pdf] body,
+html[data-markdown-pdf] #root {
+  height: auto !important;
+  overflow: visible !important;
+  background: white !important;
+  color: #171717 !important;
+}
+
+[data-markdown-pdf] [aria-label='Markdown 阅读预览'] {
+  display: block;
+  overflow: visible;
+  padding: 0;
+}
+
+[data-markdown-pdf] [data-streamdown='heading-1'] {
+  font-size: 22pt;
+}
+
+[data-markdown-pdf] [data-streamdown='heading-2'] {
+  font-size: 15pt;
+}
+
+[data-markdown-pdf] [data-streamdown='heading-3'] {
+  font-size: 12pt;
+}
+
+[data-markdown-pdf] [aria-label='Markdown 阅读预览'] > div {
+  max-width: none;
+  font-size: 11pt;
+  line-height: 1.7;
+}
+
+[data-markdown-pdf] :is(h1, h2, h3, h4) {
+  break-after: avoid;
+}
+
+[data-markdown-pdf] :is(p, li) {
+  orphans: 3;
+  widows: 3;
+}
+
+[data-markdown-pdf] :is(table, th, td) {
+  font-size: 10pt;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+[data-markdown-pdf] table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+[data-markdown-pdf] thead {
+  display: table-header-group;
+}
+
+[data-markdown-pdf] :is(tr, img, .katex-display, [data-pdf-mermaid]) {
+  break-inside: avoid;
+}
+
+[data-markdown-pdf] :is(img, [data-pdf-mermaid] svg) {
+  max-width: 100% !important;
+  max-height: 240mm;
+  height: auto;
+}
+
+[data-markdown-pdf] :is(pre, pre code) {
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere;
+}
+
+[data-markdown-pdf] :is(.overflow-x-auto, [data-streamdown='code-block-body'], pre) {
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+[data-markdown-pdf] [data-streamdown='code-block'] {
+  content-visibility: visible !important;
+  contain-intrinsic-size: none !important;
+}
+
+[data-markdown-pdf] [data-streamdown='code-block-body'] {
+  margin-top: 0 !important;
+  padding-right: 0 !important;
+}
+
+[data-markdown-pdf] button {
+  display: none !important;
+}

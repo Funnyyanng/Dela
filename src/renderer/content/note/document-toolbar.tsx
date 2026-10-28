@@ -2,6 +2,7 @@ import {
   ChevronRight,
   Clock,
   Code,
+  Download,
   Eye,
   FolderOpen,
   LoaderCircle,
@@ -26,6 +27,9 @@ export function DocumentToolbar({
   dueAt,
   onOpenInFolder,
   onReload,
+  onExportPdf,
+  exporting,
+  exportDisabled,
 }: {
   path: string[];
   /** Markdown 才有阅读/编辑/源码切换；其他文本始终是代码编辑器。 */
@@ -39,6 +43,9 @@ export function DocumentToolbar({
   dueAt?: string | null;
   onOpenInFolder: () => void;
   onReload: () => void;
+  onExportPdf: () => void;
+  exporting: boolean;
+  exportDisabled: boolean;
 }) {
   return (
     <div
@@ -85,6 +92,19 @@ export function DocumentToolbar({
         ) : /* 正常态不常驻「已保存」图标：长期占位无信息增量；失败详情由 NoteTab 错误条承载。 */
         null}
       </span>
+      {markdown && (
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onExportPdf}
+          disabled={exporting || exportDisabled}
+          title={exportDisabled ? '当前仅显示文件片段，无法导出完整 PDF' : '导出 PDF'}
+          aria-label="导出 PDF"
+        >
+          {exporting ? <LoaderCircle className="animate-spin" /> : <Download />}
+          {exporting ? '导出中…' : '导出 PDF'}
+        </Button>
+      )}
       {markdown && (
         <Button
           size="sm"

@@ -23,6 +23,11 @@ import {
 import { checkWorkspaceSender } from '../ipc';
 import { registerLayoutIpc } from './layout';
 import { exportOfficePdf } from '../documents/export';
+import {
+  exportMarkdownPdf,
+  markdownPdfDocument,
+  markdownPdfReady,
+} from '../documents/markdown-pdf';
 import { openResourceFile } from '../resources';
 import { remoteById, remoteJoin, targetOf, withinRemoteRoot } from '../remotes/api';
 import { listRemoteDirectory, remoteFileIndex } from '../remotes/operations';
@@ -224,6 +229,22 @@ export function registerWorkspaceIpc(
         .parse(bytes),
     ),
   );
+  ipcMain.handle('workspace:export-markdown-pdf', (event, id, text) => {
+    checkWorkspaceSender(event);
+    return exportMarkdownPdf(
+      event.sender,
+      workspaceEntryIdSchema.parse(id),
+      z.string().max(2_000_000).parse(text),
+    );
+  });
+  ipcMain.handle('workspace:markdown-pdf-document', (event) => {
+    checkWorkspaceSender(event);
+    return markdownPdfDocument(event.sender.id);
+  });
+  ipcMain.handle('workspace:markdown-pdf-ready', (event, error) => {
+    checkWorkspaceSender(event);
+    markdownPdfReady(event.sender.id, z.string().max(4000).nullable().parse(error));
+  });
   handle('open-project-directory', openProjectDirectory);
   handle('project-branch', (id) => projectGitBranch(id));
   handle('project-branches', (id) => projectGitBranches(id));

@@ -28,6 +28,7 @@ beforeEach(() => {
       saveNote: vi.fn(async () => {
         throw new Error('文件已在外部修改');
       }),
+      exportMarkdownPdf: vi.fn(async () => null),
     },
   } as unknown as DelaApi;
   source = {
@@ -109,4 +110,19 @@ it('阅读预览显示当前未保存草稿，返回编辑时不重载或改写�
   expect(acquire).not.toHaveBeenCalled();
   expect(edit).not.toHaveBeenCalled();
   expect(save).not.toHaveBeenCalled();
+});
+
+it('导出使用当前草稿快照，取消保存不会重载或改写 Markdown', async () => {
+  await open();
+  await act(async () => useNoteDrafts.getState().edit(key, '# 导出我的最新修改'));
+  const save = vi.spyOn(source, 'save');
+  const acquire = vi.spyOn(source, 'acquire');
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="导出 PDF"]')!.click(),
+  );
+  expect(window.dela!.workspace.exportMarkdownPdf).toHaveBeenCalledWith(key, '# 导出我的最新修改');
+  expect(container.querySelector('pre')?.textContent).toBe('# 导出我的最新修改');
+  expect(useNoteDrafts.getState().drafts[key]?.saved).toBe('old');
+  expect(save).not.toHaveBeenCalled();
+  expect(acquire).not.toHaveBeenCalled();
 });

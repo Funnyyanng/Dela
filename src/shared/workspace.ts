@@ -82,6 +82,12 @@ export interface WorkspaceCreateInput {
   text?: string;
 }
 
+export interface MarkdownPdfDocument {
+  entryId: string;
+  title: string;
+  text: string;
+}
+
 export interface WorkspaceApi {
   getState(): Promise<WorkspaceState>;
   listLocalDirectory(id: string | null): Promise<WorkspaceEntry[]>;
@@ -101,6 +107,9 @@ export interface WorkspaceApi {
   saveNote(id: string, text: string, revision: string): Promise<string>;
   /** 把新插入的本地图片存入 Markdown 文件同目录的 assets/，返回相对路径。 */
   saveNoteImage(id: string, name: string, bytes: Uint8Array): Promise<string>;
+  exportMarkdownPdf(id: string, text: string): Promise<string | null>;
+  markdownPdfDocument(): Promise<MarkdownPdfDocument>;
+  markdownPdfReady(error: string | null): Promise<void>;
   /** 打开项目目录，main 验证项目身份并解析本地路径。 */
   openProjectDirectory(id: string, target: 'vscode' | 'explorer'): Promise<void>;
   /** 本地项目目录的当前 Git 分支；非仓库、目录不存在、git 缺失与远端项目都返回 null。 */

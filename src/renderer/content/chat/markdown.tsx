@@ -138,6 +138,8 @@ export function ChatMarkdown({
   children,
   className,
   mode = 'static',
+  plugins,
+  controls = chatControls,
   ...props
 }: ComponentProps<typeof Streamdown>) {
   return (
@@ -145,11 +147,11 @@ export function ChatMarkdown({
       className={cn(markdownStyles, className)}
       codeBlockMaxHeight={0}
       components={chatComponents}
-      controls={chatControls}
+      controls={controls}
       linkSafety={chatLinkSafety}
       mermaid={mermaidOptions()}
       mode={mode}
-      plugins={chatStreamdownPlugins}
+      plugins={plugins ? { ...chatStreamdownPlugins, ...plugins } : chatStreamdownPlugins}
       skipHtml
       translations={chatTranslations}
       {...props}

@@ -3,6 +3,7 @@ import type { OfficeExportEvent, WorkspaceApi, WorkspaceCreateInput } from '../s
 import type { DocumentContent } from '../shared/documents';
 import type { RemoteDirectoryEntry, RemotePortsState } from '../shared/remotes';
 import type { ResourceRef } from '../shared/resources';
+import type { MarkdownPdfDocument } from '../shared/workspace';
 import { invoke, on } from './lib';
 
 export const workspace = {
@@ -25,6 +26,12 @@ export const workspace = {
     invoke('workspace:save-note', id, text, revision),
   saveNoteImage: (id: string, name: string, bytes: Uint8Array) =>
     invoke('workspace:save-note-image', id, name, bytes) as Promise<string>,
+  exportMarkdownPdf: (id: string, text: string) =>
+    invoke('workspace:export-markdown-pdf', id, text) as Promise<string | null>,
+  markdownPdfDocument: () =>
+    invoke('workspace:markdown-pdf-document') as Promise<MarkdownPdfDocument>,
+  markdownPdfReady: (error: string | null) =>
+    invoke('workspace:markdown-pdf-ready', error) as Promise<void>,
   openProjectDirectory: (id: string, target: 'vscode' | 'explorer') =>
     invoke('workspace:open-project-directory', id, target),
   projectBranch: (id: string) => invoke('workspace:project-branch', id) as Promise<string | null>,
