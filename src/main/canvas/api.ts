@@ -160,7 +160,14 @@ async function syncCourse(id: number): Promise<CanvasState> {
   const oldItems = getCanvasState().items.filter((i) => i.courseId === id);
   const group = (key: string, name: string) => {
     const groupId = `${id}:${key}`;
-    items.push({ id: groupId, parentId: null, courseId: id, name, kind: 'folder', sourceId: null });
+    items.push({
+      id: groupId,
+      parentId: null,
+      courseId: id,
+      name,
+      kind: 'folder',
+      sourceId: null,
+    });
     return groupId;
   };
   const file = (f: Row, parentId: string) => {
@@ -524,7 +531,10 @@ async function downloadFile(source: StoredSource): Promise<{ path: string; mime:
     // availablePath treats our own cached file as a collision. Reusing a file
     // must not rename it underneath another active PDF range request.
     if (resolve(dirname(cached.value)) === resolve(dir))
-      return { path: cached.value, mime: source.mime || 'application/octet-stream' };
+      return {
+        path: cached.value,
+        mime: source.mime || 'application/octet-stream',
+      };
     mkdirSync(dir, { recursive: true });
     const path = availablePath(dir, source.title);
     if (path !== cached.value) {
@@ -532,7 +542,10 @@ async function downloadFile(source: StoredSource): Promise<{ path: string; mime:
       db.prepare('INSERT OR REPLACE INTO workspace_settings VALUES (?, ?)').run(cacheKey, path);
       return { path, mime: source.mime || 'application/octet-stream' };
     }
-    return { path: cached.value, mime: source.mime || 'application/octet-stream' };
+    return {
+      path: cached.value,
+      mime: source.mime || 'application/octet-stream',
+    };
   }
   mkdirSync(dir, { recursive: true });
   const metadata = row(await (await request(`files/${source.fileId}`)).json());
@@ -683,19 +696,14 @@ export async function readCanvasPage(id: string) {
 
 // TODO 独立刷新作业，避免定时轮询触发文件、模块和页面的全量同步。
 export async function listTodoCanvasCourses() {
-  const courses = await list('courses?enrollment_state=active&per_page=50');
-  const archived = new Set(
-    getCanvasState()
-      .courses.filter((c) => c.archived)
-      .map((c) => c.id),
-  );
-  // code 供 TODO 月历与课表共用稳定配色键；name 仅用于展示。
+  const courses = await list('courses?enrollment_state=active&include[]=term&per_page=50');
   return courses
-    .filter((c) => num(c.id) > 0 && !archived.has(num(c.id)))
+    .filter((c) => num(c.id) > 0)
     .map((c) => ({
       id: num(c.id),
       name: str(c.name) || str(c.course_code) || `课程 ${num(c.id)}`,
       code: str(c.course_code),
+      ...(str(row(c.term).name) ? { term: str(row(c.term).name) } : {}),
     }));
 }
 

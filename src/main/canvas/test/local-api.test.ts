@@ -1,14 +1,65 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../credentials', () => ({ loadCanvasToken: () => 'fixture-token' }));
+vi.mock('../../credentials', () => ({
+  loadCanvasToken: () => 'fixture-token',
+}));
 vi.mock('../../database', () => ({ getDatabase: vi.fn() }));
 
-import { getCanvasAttachment, getCanvasQuizzes, readCanvasPage } from '../api';
+import {
+  getCanvasAttachment,
+  getCanvasQuizzes,
+  listTodoCanvasCourses,
+  readCanvasPage,
+} from '../api';
 import { getDatabase } from '../../database';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('local course source metadata', () => {
+  it('lists all active enrolled courses across pages without applying local archive filters', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: 1,
+              name: '当前课程',
+              course_code: 'NOW',
+              term: { name: '2026-2027 Fall' },
+            },
+          ]),
+          {
+            headers: {
+              Link: '<https://oc.sjtu.edu.cn/api/v1/courses?page=2>; rel="next"',
+            },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: 2,
+              name: '仍在修读的课程',
+              course_code: 'ACTIVE',
+              term: { name: '2025-2026 Fall' },
+            },
+            { id: 3, name: '未标注学期' },
+            { name: '无权访问' },
+          ]),
+        ),
+      );
+    vi.stubGlobal('fetch', fetch);
+    expect(await listTodoCanvasCourses()).toEqual([
+      { id: 1, name: '当前课程', code: 'NOW', term: '2026-2027 Fall' },
+      { id: 2, name: '仍在修读的课程', code: 'ACTIVE', term: '2025-2026 Fall' },
+      { id: 3, name: '未标注学期', code: '' },
+    ]);
+    expect(String(fetch.mock.calls[0]![0])).toContain('enrollment_state=active');
+    expect(String(fetch.mock.calls[0]![0])).toContain('include[]=term');
+    expect(String(fetch.mock.calls[1]![0])).toContain('page=2');
+  });
   it('fills previously cached assignment metadata with actual versions and available rubric', async () => {
     const source = {
       id: 'assignment:7',
@@ -58,7 +109,14 @@ describe('local course source metadata', () => {
       .fn()
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ id: 1, title: '第一测', description: '<p>第一章</p>', due_at: null }]),
+          JSON.stringify([
+            {
+              id: 1,
+              title: '第一测',
+              description: '<p>第一章</p>',
+              due_at: null,
+            },
+          ]),
           {
             headers: {
               Link: '<https://oc.sjtu.edu.cn/api/v1/courses/9/quizzes?page=2>; rel="next"',
@@ -82,7 +140,11 @@ describe('local course source metadata', () => {
     vi.stubGlobal('fetch', fetch);
     const quizzes = await getCanvasQuizzes(9);
     expect(quizzes).toHaveLength(2);
-    expect(quizzes[0]).toMatchObject({ id: 1, description: '<p>第一章</p>', dueAt: null });
+    expect(quizzes[0]).toMatchObject({
+      id: 1,
+      description: '<p>第一章</p>',
+      dueAt: null,
+    });
     expect(quizzes[1]).toMatchObject({ id: 2, assignmentId: 7 });
     expect(String(fetch.mock.calls[1]![0])).toContain('page=2');
   });

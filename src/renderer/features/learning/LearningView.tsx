@@ -27,6 +27,9 @@ import { cn } from '../../lib/utils';
 import type { LearningAction, LearningSelection } from './learning-prompt';
 import { startLearning } from './start-learning';
 import { PracticeReview } from './PracticeReview';
+import { CanvasAssignments } from './CanvasAssignments';
+import { LearningJobProgress } from './LearningJobProgress';
+import { useLearningJobs } from './learning-jobs';
 
 function dateLabel(value: string | null) {
   return value
@@ -71,6 +74,12 @@ export function LearningView() {
   const [now, setNow] = useState(Date.now);
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
   const [sourceQuery, setSourceQuery] = useState('');
+  const finishedJobs = useLearningJobs((value) =>
+    value.jobs
+      .filter((job) => job.finishedAt !== null)
+      .map((job) => `${job.id}:${job.finishedAt}`)
+      .join('|'),
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -99,7 +108,7 @@ export function LearningView() {
     return () => {
       active = false;
     };
-  }, [reload]);
+  }, [reload, finishedJobs]);
 
   if (!window.dela?.learning) {
     return (
@@ -113,13 +122,6 @@ export function LearningView() {
   const course = state?.courses.find((item) => item.id === courseId) ?? state?.courses[0];
   const tasks = state?.tasks.filter((item) => item.courseId === course?.id) ?? [];
   const notes = state?.notes.filter((item) => item.courseId === course?.id) ?? [];
-  const assignments =
-    course?.sources.filter(
-      (source) =>
-        (source.kind === 'assignment' || source.sourceId.startsWith('assignment:')) &&
-        source.kind !== 'quiz' &&
-        !source.sourceId.startsWith('quiz:'),
-    ) ?? [];
   const materials =
     course?.sources.filter(
       (source) =>
@@ -175,7 +177,7 @@ export function LearningView() {
     } catch (reason) {
       const description = errorText(reason);
       setError(description);
-      showToast({ variant: 'error', title: '学习对话未能开始', description });
+      showToast({ variant: 'error', title: '学习任务未能完成', description });
     } finally {
       startingRef.current = false;
       setStarting(false);
@@ -200,23 +202,26 @@ export function LearningView() {
           </div>
           <div className="flex items-center gap-2">
             {state && state.courses.length > 0 && (
-              <select
-                aria-label="选择学习课程"
-                className="h-8 max-w-72 rounded-control bg-field px-3 text-13 text-ink shadow-hairline outline-none focus-visible:outline-2 focus-visible:outline-bui-accent"
-                onChange={(event) => {
-                  localStorage.setItem('learning:last-course', event.target.value);
-                  setCourseId(Number(event.target.value));
-                  setSelectedSources([]);
-                  setSourceQuery('');
-                }}
-                value={course?.id ?? ''}
-              >
-                {state.courses.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
+              <label className="flex items-center gap-2 text-xs text-ink-3">
+                笔记与练习课程
+                <select
+                  aria-label="选择笔记与练习课程"
+                  className="h-8 max-w-72 rounded-control bg-field px-3 text-13 text-ink shadow-hairline outline-none focus-visible:outline-2 focus-visible:outline-bui-accent"
+                  onChange={(event) => {
+                    localStorage.setItem('learning:last-course', event.target.value);
+                    setCourseId(Number(event.target.value));
+                    setSelectedSources([]);
+                    setSourceQuery('');
+                  }}
+                  value={course?.id ?? ''}
+                >
+                  {state.courses.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             <Button
               aria-label="刷新学习中心"
@@ -327,6 +332,16 @@ export function LearningView() {
             </div>
           </details>
         )}
+        <LearningJobProgress />
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
+          <SegmentedControl
+            className="min-w-60"
+            onChange={setTab}
+            options={['作业', '笔记', '练习']}
+            value={tab}
+          />
+        </div>
+        {tab === '作业' && <CanvasAssignments state={state} reload={reload} />}
         {!state && loading ? (
           <p className="py-16 text-center text-13 text-ink-3">正在读取课程与学习记录…</p>
         ) : !state && error ? (
@@ -354,10 +369,8 @@ export function LearningView() {
                   action: 'assignment' as const,
                   label: '完成作业',
                   icon: ClipboardCheck,
-                  description: '选择具体作业，一键完成或检查答案',
-                  detail: tasks.length
-                    ? `${tasks.filter((task) => task.status !== 'checked').length} 项工作记录待完成或复核`
-                    : '尚未建立作业工作记录',
+                  description: '所有课程的 Canvas 未提交作业',
+                  detail: '勾选作业后直接处理，在当前页面查看进度',
                 },
                 {
                   action: 'notes' as const,
@@ -401,89 +414,13 @@ export function LearningView() {
                 </button>
               ))}
             </section>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
-              <SegmentedControl
-                className="min-w-60"
-                onChange={setTab}
-                options={['作业', '笔记', '练习']}
-                value={tab}
-              />
-              <p className="text-xs text-ink-3">
-                {course.sources.length} 份课程资料 ·{' '}
-                {state?.syncedAt ? `Canvas 上次同步 ${dateLabel(state.syncedAt)}` : '本地学习记录'}
-              </p>
-            </div>
-            {tab === '作业' && (
-              <section aria-label="课程作业" className="space-y-4">
-                {assignments.length > 0 && (
-                  <section aria-label="选择作业" className="rounded-card border border-line p-4">
-                    <h2 className="text-15 font-medium">选择要处理的作业</h2>
-                    <p className="mt-1 text-xs text-ink-3">
-                      自动带上原题、附件和已有答案，点击后直接开始。
-                    </p>
-                    <ul className="mt-3 divide-y divide-line">
-                      {assignments.map((source) => {
-                        const task = tasks.find(
-                          (item) => item.assignmentSourceId === source.sourceId,
-                        );
-                        return (
-                          <li
-                            className="flex flex-wrap items-center justify-between gap-3 py-3"
-                            key={source.sourceId}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <p className="break-words text-13 font-medium">{source.title}</p>
-                              {task && (
-                                <p className="mt-1 text-xs text-ink-3">
-                                  {task.status === 'checked' ? '已有复核记录' : '已有作业进度'}
-                                </p>
-                              )}
-                            </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                              {source.localPath && (
-                                <Button
-                                  onClick={() => openFile(course, source.localPath!)}
-                                  size="sm"
-                                  variant="ghost"
-                                  aria-label={`查看原题：${source.title}`}
-                                >
-                                  查看原题
-                                </Button>
-                              )}
-                              <Button
-                                disabled={starting}
-                                onClick={() =>
-                                  void start('assignment', task, { sources: [source] })
-                                }
-                                size="sm"
-                                variant="outline"
-                                aria-label={`完成作业：${source.title}`}
-                              >
-                                完成作业
-                              </Button>
-                              <Button
-                                disabled={starting}
-                                onClick={() => void start('review', task, { sources: [source] })}
-                                size="sm"
-                                variant="outline"
-                                aria-label={`检查答案：${source.title}`}
-                              >
-                                检查答案
-                              </Button>
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </section>
-                )}
-                {!tasks.length && !assignments.length ? (
-                  <EmptyState
-                    text="还没有可选择的作业"
-                    detail="同步 Canvas 作业，或在项目文件列表中选中本地作业文件后开始。"
-                  />
-                ) : (
-                  tasks.map((task) => (
+            {tab === '作业' && tasks.length > 0 && (
+              <details className="space-y-4 rounded-card border border-line p-4">
+                <summary className="cursor-pointer text-13 text-ink-3">
+                  本地作业记录 · {course.name} · {tasks.length} 项（与 Canvas 提交状态分别记录）
+                </summary>
+                <section aria-label="本地作业记录" className="space-y-4">
+                  {tasks.map((task) => (
                     <article
                       className="space-y-4 rounded-card border border-line p-5"
                       key={task.id}
@@ -579,20 +516,11 @@ export function LearningView() {
                             ? `上次复核 ${dateLabel(task.checkedAt)}`
                             : '完成后将核对成果、要求与检查证据'}
                         </p>
-                        <Button
-                          disabled={starting}
-                          onClick={() => void start('assignment', task)}
-                          size="sm"
-                          variant="outline"
-                        >
-                          继续完成与检查
-                          <ArrowUpRight className="size-3.5" />
-                        </Button>
                       </div>
                     </article>
-                  ))
-                )}
-              </section>
+                  ))}
+                </section>
+              </details>
             )}
             {tab === '笔记' && (
               <section aria-label="课程笔记" className="space-y-3">

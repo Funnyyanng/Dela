@@ -5,6 +5,7 @@ import { showToast } from '../app/toasts';
 import { errorText } from '../workspace/store';
 import type { LearningAction } from '../features/learning/learning-prompt';
 import { resolveLearningSelection, startLearning } from '../features/learning/start-learning';
+import { LearningJobProgress } from '../features/learning/LearningJobProgress';
 
 export function FileLearningActions({
   entry,
@@ -27,6 +28,28 @@ export function FileLearningActions({
         sourceId: entry.sourceId,
       });
       if (!resolved) throw new Error('未找到这个文件对应的课程，请先将课程资料同步到当前项目。');
+      if (action === 'assignment') {
+        const assignments =
+          resolved.selection.sources?.filter((source) => source.kind === 'assignment') ?? [];
+        const sourceId =
+          assignments.length === 1 ? assignments[0]!.sourceId : resolved.target?.assignmentSourceId;
+        const assignmentId = Number(sourceId?.match(/^assignment:(\d+)$/)?.[1]);
+        if (!assignmentId)
+          throw new Error('这个文件未对应到具体的 Canvas 作业，请在学习中心选择未提交作业。');
+        let todos = await window.dela!.todo.getState();
+        let assignment = todos.items.find(
+          (item) => item.courseId === resolved.course.id && item.assignmentId === assignmentId,
+        );
+        if (!assignment) {
+          todos = await window.dela!.todo.refresh();
+          assignment = todos.items.find(
+            (item) => item.courseId === resolved.course.id && item.assignmentId === assignmentId,
+          );
+        }
+        if (!assignment)
+          throw new Error('Canvas 中未找到这份作业，请在学习中心刷新未提交作业列表。');
+        resolved.selection.assignment = assignment;
+      }
       await startLearning(
         resolved.course,
         action,
@@ -34,7 +57,7 @@ export function FileLearningActions({
         resolved.selection,
       );
     } catch (reason) {
-      showToast({ variant: 'error', title: '学习任务未能开始', description: errorText(reason) });
+      showToast({ variant: 'error', title: '学习任务未能完成', description: errorText(reason) });
     } finally {
       pending.current = false;
       setStarting(false);
@@ -65,6 +88,7 @@ export function FileLearningActions({
           </Button>
         ))}
       </div>
+      <LearningJobProgress projectId={projectId} compact />
       {starting && (
         <p role="status" className="pt-1.5 text-xs text-ink-3">
           正在处理…

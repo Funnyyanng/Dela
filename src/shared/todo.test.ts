@@ -3,7 +3,13 @@ import { canvasAssignmentRequirements, canvasTodoStatus, todoCompleted } from '.
 
 it('preserves explicit Canvas requirements and leaves missing fields unknown', () => {
   const rubric = [
-    { id: 'criterion1', description: '论证', points: 0, ratings: [], custom_field: 'value' },
+    {
+      id: 'criterion1',
+      description: '论证',
+      points: 0,
+      ratings: [],
+      custom_field: 'value',
+    },
   ];
   expect(
     canvasAssignmentRequirements({
@@ -46,7 +52,9 @@ describe('Canvas 作业完成事实', () => {
   });
   it('有成绩或零分不等于已提交', () => {
     expect(
-      canvasTodoStatus({ submission: { workflow_state: 'graded', score: 0, submitted_at: null } }),
+      canvasTodoStatus({
+        submission: { workflow_state: 'graded', score: 0, submitted_at: null },
+      }),
     ).toBe('pending');
   });
   it('已提交、待批阅与已批改分别展示', () => {
@@ -56,7 +64,10 @@ describe('Canvas 作业完成事实', () => {
     );
     expect(
       canvasTodoStatus({
-        submission: { workflow_state: 'graded', submitted_at: '2026-09-21T00:00:00Z' },
+        submission: {
+          workflow_state: 'graded',
+          submitted_at: '2026-09-21T00:00:00Z',
+        },
       }),
     ).toBe('graded');
   });
@@ -75,5 +86,43 @@ describe('Canvas 作业完成事实', () => {
         submission: { workflow_state: 'unsubmitted' },
       }),
     ).toBe('offline');
+  });
+  it('does not treat offline, no-submission, or unavailable submission state as pending online work', () => {
+    expect(
+      canvasTodoStatus({
+        submission_types: ['none'],
+        submission: { workflow_state: 'unsubmitted' },
+      }),
+    ).toBe('offline');
+    expect(
+      canvasTodoStatus({
+        submission_types: ['on_paper'],
+        submission: { workflow_state: 'graded', missing: true },
+      }),
+    ).toBe('offline');
+    expect(
+      canvasTodoStatus({
+        submission_types: ['on_paper'],
+        submission: { workflow_state: 'graded', missing: false },
+      }),
+    ).toBe('graded');
+    expect(
+      canvasTodoStatus({
+        submission_types: ['online_upload'],
+        submission: null,
+      }),
+    ).toBe('unknown');
+    expect(
+      canvasTodoStatus({
+        submission_types: ['online_upload'],
+        submission: { workflow_state: 'deleted' },
+      }),
+    ).toBe('unknown');
+    expect(
+      canvasTodoStatus({
+        submission_types: ['online_quiz'],
+        submission: { workflow_state: 'unsubmitted' },
+      }),
+    ).toBe('pending');
   });
 });

@@ -66,6 +66,7 @@ export interface TodoItem {
   /** Canvas 课程代码；月历与课表共用它生成稳定的课程颜色。 */
   courseCode?: string;
   courseName?: string;
+  courseTerm?: string;
   assignmentId?: number;
   url?: string;
   /** 仅 Canvas 作业：作业描述原始 HTML，随作业同步缓存，renderer 经沙箱 iframe 渲染。 */
@@ -74,8 +75,18 @@ export interface TodoItem {
   submittedAt?: string | null;
   syncedAt?: string;
 }
+export interface TodoCanvasCourse {
+  id: number;
+  name: string;
+  code: string;
+  term?: string;
+  syncedAt: string | null;
+  error: string | null;
+}
+
 export interface TodoState {
   items: TodoItem[];
+  canvasCourses?: TodoCanvasCourse[];
   connected: boolean;
   syncing: boolean;
   syncedAt: string | null;

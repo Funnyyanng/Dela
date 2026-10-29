@@ -3,7 +3,7 @@ import { getTodoState, refreshTodos } from '../../../todo';
 import { coverage, freshness, tool, toolError } from '../shared';
 
 export const refreshTodosTool = tool(
-  '从 Canvas 刷新作业与提交状态缓存（联网写缓存；覆盖在读未归档课程），仅返回统计与同步状态；作业列表用 query_assignments 分页查询。次级副作用：已知课程出现新作业时会触发系统桌面通知。不会提交作业。',
+  '从 Canvas 刷新作业与提交状态缓存（联网写缓存；覆盖所有有效选课，不按本地归档标记排除），仅返回统计与同步状态；作业列表用 query_assignments 分页查询。次级副作用：已知课程出现新作业时会触发系统桌面通知。不会提交作业。',
   z.object({}).strict(),
   async () => {
     const state = getTodoState();

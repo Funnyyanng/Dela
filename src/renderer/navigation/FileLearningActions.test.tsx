@@ -6,11 +6,15 @@ import type { DelaApi, WorkspaceEntry } from '../../shared/api';
 import type { LearningCourse, LearningState, LearningTask } from '../../shared/learning';
 import { showToast } from '../app/toasts';
 import { startLearning } from '../features/learning/start-learning';
+import { useLearningJobs } from '../features/learning/learning-jobs';
 import { useWorkspaceStore } from '../workspace/store';
 import { FileLearningActions } from './FileLearningActions';
 import { ProjectFileTree } from './ProjectFileTree';
 
 vi.mock('../app/toasts', () => ({ showToast: vi.fn() }));
+vi.mock('../content/chat/markdown', () => ({
+  ChatMarkdown: ({ children }: { children: string }) => children,
+}));
 vi.mock('../features/learning/start-learning', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/learning/start-learning')>()),
   startLearning: vi.fn(),
@@ -76,6 +80,14 @@ const file: WorkspaceEntry = {
   path: '/courses/crypto/作业/EX3/EX3.pdf',
   updatedAt: '',
 };
+const assignment = {
+  id: 'canvas:10:20',
+  source: 'canvas',
+  courseId: 10,
+  assignmentId: 20,
+  title: 'EX3',
+  status: 'pending',
+};
 let container: HTMLDivElement;
 let root: Root;
 let getState: ReturnType<typeof vi.fn>;
@@ -95,7 +107,11 @@ beforeEach(() => {
   vi.mocked(startLearning).mockResolvedValue();
   vi.spyOn(useWorkspaceStore.getState(), 'ensureDirectory').mockResolvedValue();
   getState = vi.fn(async () => state);
-  window.dela = { learning: { getState } } as unknown as DelaApi;
+  useLearningJobs.setState({ jobs: [] });
+  window.dela = {
+    learning: { getState },
+    todo: { getState: async () => ({ items: [assignment] }) },
+  } as unknown as DelaApi;
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -197,6 +213,7 @@ it('uses the latest clicked assignment folder even when an earlier document rema
   expect(startLearning).toHaveBeenCalledWith(course, 'assignment', task, {
     paths: [folder.path],
     sources: course.sources,
+    assignment,
   });
 });
 
@@ -224,4 +241,14 @@ it('does not offer learning actions for archived, remote, unsupported or project
     );
     expect(container.querySelector('[aria-label="所选文件的学习操作"]')).toBeNull();
   }
+});
+
+it('refuses to turn an unrelated local file into a Canvas assignment', async () => {
+  getState.mockResolvedValue({ ...state, tasks: [], courses: [{ ...course, sources: [] }] });
+  await renderActions();
+  await act(async () => button('完成作业').click());
+  expect(startLearning).not.toHaveBeenCalled();
+  expect(showToast).toHaveBeenCalledWith(
+    expect.objectContaining({ description: expect.stringContaining('未对应到具体的 Canvas 作业') }),
+  );
 });

@@ -6,7 +6,9 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }));
 vi.mock('../../database', () => ({ getDatabase: vi.fn() }));
-vi.mock('../../credentials', () => ({ loadCanvasToken: vi.fn(() => 'test-token') }));
+vi.mock('../../credentials', () => ({
+  loadCanvasToken: vi.fn(() => 'test-token'),
+}));
 vi.mock('../../ipc', () => ({ checkWorkspaceSender: vi.fn() }));
 vi.mock('../../canvas/api', () => ({
   listTodoCanvasCourses: vi.fn(),
@@ -123,6 +125,60 @@ describe('TODO 持久化与同步', () => {
     vi.mocked(listTodoCanvasAssignments).mockResolvedValue([]);
     await refreshTodos();
     expect(getTodoState().items).toHaveLength(0);
+  });
+  it('reports every active course, including courses with no assignments, and per-course failures', async () => {
+    vi.mocked(listTodoCanvasCourses).mockResolvedValue([
+      { id: 1, name: '课程一', code: 'ONE', term: '2026-2027 Fall' },
+      { id: 2, name: '课程二', code: 'TWO', term: '2026-2027 Fall' },
+      { id: 3, name: '课程三', code: 'THREE', term: '2026-2027 Fall' },
+    ]);
+    vi.mocked(listTodoCanvasAssignments).mockImplementation(async (courseId) =>
+      courseId === 3 ? [] : [assignment(courseId)],
+    );
+    const first = await refreshTodos();
+    expect(first.canvasCourses).toHaveLength(3);
+    expect(first.items[0]).toMatchObject({ courseTerm: '2026-2027 Fall' });
+    const previousSync = first.canvasCourses!.find((course) => course.id === 2)!.syncedAt;
+    vi.mocked(listTodoCanvasAssignments).mockImplementation(async (courseId) => {
+      if (courseId === 2) throw new Error('暂时不可用');
+      return courseId === 3 ? [] : [assignment(1, { workflow_state: 'submitted' })];
+    });
+    const result = await refreshTodos();
+    expect(result.canvasCourses).toEqual([
+      expect.objectContaining({
+        id: 1,
+        error: null,
+        syncedAt: expect.any(String),
+      }),
+      expect.objectContaining({
+        id: 2,
+        error: '暂时不可用',
+        syncedAt: previousSync,
+      }),
+      expect.objectContaining({
+        id: 3,
+        error: null,
+        syncedAt: expect.any(String),
+      }),
+    ]);
+    expect(result.items.find((item) => item.courseId === 1)?.status).toBe('submitted');
+    expect(result.items.find((item) => item.courseId === 2)?.status).toBe('pending');
+    expect(result.error).toContain('课程二：暂时不可用');
+    expect(result.syncedAt).toBe(first.syncedAt);
+  });
+  it('removes inactive-course assignments only after a successful complete course list', async () => {
+    const personal = saveTodo({ title: '我的待办' }).items[0]!;
+    await refreshTodos();
+    vi.mocked(listTodoCanvasCourses).mockRejectedValueOnce(new Error('课程列表失败'));
+    const failed = await refreshTodos();
+    expect(failed.items).toHaveLength(2);
+    expect(failed.canvasCourses).toHaveLength(1);
+    expect(failed.canvasCourses![0]!.error).toBe('课程列表失败');
+    vi.mocked(listTodoCanvasCourses).mockResolvedValue([]);
+    const result = await refreshTodos();
+    expect(result.items).toEqual([expect.objectContaining({ id: personal.id })]);
+    expect(result.canvasCourses).toEqual([]);
+    expect(result.error).toBeNull();
   });
   it('个人待办可编辑、完成、重开和删除，不能手动完成 Canvas 作业', async () => {
     const item = saveTodo({ title: '准备报告' }).items[0]!;

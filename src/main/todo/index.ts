@@ -8,6 +8,7 @@ import { listTodoCanvasAssignments, listTodoCanvasCourses } from '../canvas/api'
 import { canvasAssignmentRequirements, canvasTodoStatus } from '../../shared/todo';
 import { calendarEventColors } from '../../shared/api';
 import type { NotificationItem, TodoItem, TodoState } from '../../shared/api';
+import type { TodoCanvasCourse } from '../../shared/todo';
 import { systemNotifyItem } from '../notifications/system';
 
 const idSchema = z.string().min(1).max(512);
@@ -29,7 +30,12 @@ type TodoRow = {
   read_at: string | null;
   notice_at: string | null;
 };
-type SyncState = { syncedAt: string | null; error: string | null; courses: number[] };
+type SyncState = {
+  syncedAt: string | null;
+  error: string | null;
+  courses: number[];
+  canvasCourses?: TodoCanvasCourse[];
+};
 let activeRefresh: Promise<TodoState> | null = null;
 
 function canvasOwner(): string | null {
@@ -59,6 +65,7 @@ export function getTodoState(): TodoState {
       .sort(
         (a, b) => (a.dueAt ?? 'z').localeCompare(b.dueAt ?? 'z') || a.title.localeCompare(b.title),
       ),
+    canvasCourses: sync.canvasCourses,
     connected: owner !== null,
     syncing: activeRefresh !== null,
     syncedAt: sync.syncedAt,
@@ -172,8 +179,27 @@ async function syncCanvasTodos(): Promise<TodoState> {
   const previous = syncState(owner);
   const successful = new Set(previous.courses);
   const errors: string[] = [];
+  let canvasCourses = previous.canvasCourses;
   try {
     const courses = await listTodoCanvasCourses();
+    if (canvasOwner() !== owner) return getTodoState();
+    canvasCourses = courses.map((course) => ({
+      ...course,
+      syncedAt: previous.canvasCourses?.find((item) => item.id === course.id)?.syncedAt ?? null,
+      error: null,
+    }));
+    const activeIds = new Set(courses.map((course) => course.id));
+    const cached = db.prepare('SELECT id, data FROM todo_items WHERE owner=?').all(owner) as {
+      id: string;
+      data: string;
+    }[];
+    db.transaction(() => {
+      for (const item of cached) {
+        const courseId = (JSON.parse(item.data) as TodoItem).courseId;
+        if (courseId !== undefined && !activeIds.has(courseId))
+          db.prepare('DELETE FROM todo_items WHERE id=? AND owner=?').run(item.id, owner);
+      }
+    })();
     for (const course of courses) {
       if (canvasOwner() !== owner) return getTodoState();
       try {
@@ -205,6 +231,7 @@ async function syncCanvasTodos(): Promise<TodoState> {
               courseId: course.id,
               courseCode: course.code || undefined,
               courseName: course.name,
+              courseTerm: course.term,
               title: typeof a.name === 'string' ? a.name : '未命名作业',
               notes: '',
               dueAt: typeof a.due_at === 'string' ? a.due_at : null,
@@ -250,12 +277,20 @@ async function syncCanvasTodos(): Promise<TodoState> {
           });
         }
         successful.add(course.id);
+        canvasCourses.find((item) => item.id === course.id)!.syncedAt = now;
       } catch (error) {
-        errors.push(`${course.name}：${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        canvasCourses.find((item) => item.id === course.id)!.error = message;
+        errors.push(`${course.name}：${message}`);
       }
     }
   } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    errors.push(message);
+    canvasCourses = canvasCourses?.map((course) => ({
+      ...course,
+      error: message,
+    }));
   }
   if (canvasOwner() === owner) {
     db.prepare('INSERT OR REPLACE INTO workspace_settings(key, value) VALUES (?, ?)').run(
@@ -264,6 +299,7 @@ async function syncCanvasTodos(): Promise<TodoState> {
         syncedAt: errors.length ? previous.syncedAt : new Date().toISOString(),
         error: errors.join('\n') || null,
         courses: [...successful],
+        canvasCourses,
       } satisfies SyncState),
     );
   }

@@ -11,6 +11,7 @@ import type {
 import { LearningView } from './LearningView';
 import { learningPrompt } from './learning-prompt';
 import { PracticeReview } from './PracticeReview';
+import { useLearningJobs } from './learning-jobs';
 
 const { openChat, openProject, openDocument, putChat, refresh, toast } = vi.hoisted(() => ({
   openChat: vi.fn(() => true),
@@ -27,6 +28,14 @@ vi.mock('../../sessions/store', () => ({
   useSessions: { getState: () => ({ putChat, refresh }) },
 }));
 vi.mock('../../app/toasts', () => ({ showToast: toast }));
+vi.mock('./CanvasAssignments', () => ({
+  CanvasAssignments: ({ state, reload }: { state: LearningState | null; reload: number }) => (
+    <section aria-label="选择作业" data-reload={reload} data-task-count={state?.tasks.length ?? 0}>
+      所有课程的 Canvas 未提交作业
+    </section>
+  ),
+}));
+vi.mock('./LearningJobProgress', () => ({ LearningJobProgress: () => null }));
 
 const courses: LearningCourse[] = [
   {
@@ -85,6 +94,7 @@ const submit = vi.fn();
 const getState = vi.fn();
 
 beforeEach(() => {
+  useLearningJobs.setState({ jobs: [] });
   localStorage.clear();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.clearAllMocks();
@@ -104,12 +114,66 @@ beforeEach(() => {
   submit.mockResolvedValue({ ...state, practice: [] });
   window.dela = {
     learning: { getState, submitPracticeAttempt: submit },
-    session: { create: createSession, ask },
+    session: { create: createSession, ask, onRunEvent: () => () => {} },
   } as unknown as typeof window.dela;
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
 });
+
+it.each(['completed', 'failed', 'stopped'] as const)(
+  'refreshes saved learning records after a job is %s without refreshing Canvas',
+  async (status) => {
+    useLearningJobs.getState().add({
+      id: 'background-job',
+      projectId: 'project-one',
+      courseId: 1,
+      courseName: '随机过程',
+      title: '作业1',
+      action: 'assignment',
+      status: 'running',
+      sessionId: 'session-one',
+      error: null,
+      result: '',
+      files: [],
+      startedAt: 1,
+      finishedAt: null,
+    });
+    await act(async () => root.render(<LearningView />));
+    expect(getState).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      useLearningJobs.getState().update('background-job', { result: '正在复核' }),
+    );
+    expect(getState).toHaveBeenCalledTimes(1);
+    const task: LearningTask = {
+      id: 'new-task',
+      courseId: 1,
+      title: '刚保存的作业成果',
+      assignmentSourceId: 'assignment:1',
+      dueAt: null,
+      status: 'draft',
+      requirements: [],
+      deliverables: [],
+      evidence: [],
+      findings: [],
+      checks: [],
+      updatedAt: '2026-10-29T00:00:00Z',
+      checkedAt: null,
+      warnings: [],
+    };
+    getState.mockResolvedValue({ ...state, tasks: [task] });
+    await act(async () =>
+      useLearningJobs.getState().update('background-job', { status, finishedAt: 2 }),
+    );
+    expect(getState).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('section[aria-label="本地作业记录"]')?.textContent).toContain(
+      '刚保存的作业成果',
+    );
+    const assignmentPicker = host.querySelector('section[aria-label="选择作业"]')!;
+    expect(assignmentPicker.getAttribute('data-task-count')).toBe('1');
+    expect(assignmentPicker.getAttribute('data-reload')).toBe('0');
+  },
+);
 
 afterEach(() => {
   act(() => root.unmount());
@@ -331,7 +395,7 @@ it('starts only the selected course workflow after an explicit action', async ()
   expect(createSession).not.toHaveBeenCalled();
   await act(async () => button('带我学习').click());
   expect(createSession).toHaveBeenCalledWith('project-two', 'library');
-  expect(openChat).toHaveBeenCalledWith('session-one', 'project-two');
+  expect(openChat).not.toHaveBeenCalled();
   const input = ask.mock.calls[0]![1];
   expect(input.text).toContain('/skill:learning-workflow');
   expect(input.text).toContain('数理统计（Canvas course_id=2）');
@@ -448,69 +512,14 @@ const assignment: LearningSource = {
   localPath: '/semester/随机过程/作业/EX3/Canvas作业说明.html',
 };
 
-const task: LearningTask = {
-  id: 'existing-ex3-task',
-  courseId: 1,
-  title: '已有 EX3 验收',
-  assignmentSourceId: assignment.sourceId,
-  assignmentSourceVersion: assignment.version,
-  dueAt: null,
-  status: 'checked',
-  requirements: [],
-  deliverables: [],
-  evidence: [],
-  findings: [],
-  checks: [],
-  updatedAt: '2026-10-29T00:00:00Z',
-  checkedAt: '2026-10-29T00:00:00Z',
-  warnings: [],
-};
-
-it('opens the assignment picker without starting a broad course task, then starts the exact original assignment', async () => {
-  const otherAssignment = { ...assignment, sourceId: 'assignment:other', title: 'EX4. 其他作业' };
-  const quiz = { ...assignment, sourceId: 'quiz:1:1', title: '期中测验', kind: 'quiz' };
-  getState.mockResolvedValue({
-    ...state,
-    courses: [{ ...courses[0]!, sources: [assignment, otherAssignment, quiz] }],
-  });
+it('opens the global Canvas assignment picker without starting a course-wide task', async () => {
   await act(async () => root.render(<LearningView />));
   await act(async () => button('笔记').click());
   await act(async () => button('完成作业').click());
   expect(createSession).not.toHaveBeenCalled();
-  expect(host.querySelector('section[aria-label="选择作业"]')!.textContent).not.toContain(
-    '期中测验',
+  expect(host.querySelector('section[aria-label="选择作业"]')!.textContent).toContain(
+    '所有课程的 Canvas 未提交作业',
   );
-  await act(async () =>
-    host.querySelector<HTMLButtonElement>('[aria-label="完成作业：EX3. 分组加密算法"]')!.click(),
-  );
-  expect(createSession).toHaveBeenCalledWith('project-one', 'library');
-  const input = ask.mock.calls[0]![1];
-  expect(input.text).toContain(assignment.sourceId);
-  expect(input.text).toContain(assignment.localPath);
-  expect(input.text).toContain(assignment.version);
-  expect(input.text).toContain('随机过程（Canvas course_id=1）');
-  expect(input.text).not.toContain(otherAssignment.sourceId);
-  expect(input.text).not.toContain('期中测验');
-  expect(input.text).toContain('不要提交到 Canvas');
-  expect(openChat).toHaveBeenCalledWith('session-one', 'project-one');
-});
-
-it('reuses an assignment record when checking the selected original assignment', async () => {
-  getState.mockResolvedValue({
-    ...state,
-    courses: [{ ...courses[0]!, sources: [assignment] }],
-    tasks: [task],
-  });
-  await act(async () => root.render(<LearningView />));
-  await act(async () =>
-    host.querySelector<HTMLButtonElement>('[aria-label="检查答案：EX3. 分组加密算法"]')!.click(),
-  );
-  const input = ask.mock.calls[0]![1];
-  expect(input.text).toContain('已有答案');
-  expect(input.text).toContain(task.id);
-  expect(input.text).toContain(assignment.sourceId);
-  expect(input.text).toContain(assignment.version);
-  expect(createSession).toHaveBeenCalledTimes(1);
 });
 
 it('starts notes with exactly the selected materials and their source versions', async () => {
@@ -601,31 +610,4 @@ it('clears material selection when changing courses, including when switching ba
     false,
   );
   expect(ask).not.toHaveBeenCalled();
-});
-
-it('does not start two actions when assignment buttons are clicked in the same render', async () => {
-  let finishCreate!: (value: unknown) => void;
-  createSession.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finishCreate = resolve;
-      }),
-  );
-  getState.mockResolvedValue({ ...state, courses: [{ ...courses[0]!, sources: [assignment] }] });
-  await act(async () => root.render(<LearningView />));
-  await act(async () => {
-    host.querySelector<HTMLButtonElement>('[aria-label="完成作业：EX3. 分组加密算法"]')!.click();
-    host.querySelector<HTMLButtonElement>('[aria-label="检查答案：EX3. 分组加密算法"]')!.click();
-  });
-  expect(createSession).toHaveBeenCalledTimes(1);
-  expect(ask).not.toHaveBeenCalled();
-  await act(async () =>
-    finishCreate({
-      sessionId: 'session-one',
-      configured: true,
-      projectId: 'project-one',
-      messages: [],
-    }),
-  );
-  expect(ask).toHaveBeenCalledTimes(1);
 });
