@@ -64,13 +64,13 @@
 
 ### 2.3 skills
 
-领域知识与工具使用指引，Pi 按 Agent Skills 规范发现。七个内置 skill（shuiyuan / canvas / classroom / mail / todo / curriculum / document-reading）由应用写进 `~/.dela/skills` 并作为附加 skill 目录交给 Pi。
+领域知识与工具使用指引，Pi 按 Agent Skills 规范发现。内置 skill（shuiyuan / canvas / classroom / mail / todo / curriculum / document-reading / learning-workflow）由应用写进 `~/.dela/skills` 并作为附加 skill 目录交给 Pi。
 
 设置 › Skills 按来源分四组：内置、本机、每个 Pi package、每个本地项目。**开关的粒度不一样**——全局 skill 按名称记禁用，项目与包里的按 `SKILL.md` 绝对路径记，因为同名的可以共存且互不牵连。
 
 `document-reading` 是唯一带依赖的 skill：它需要一套独立的 Python 环境（Windows 用 Python.org embeddable，Mac 用 python-build-standalone，均为 3.12.10；uv 固定，压缩包固定 SHA256），装进 `userData/components`，不要求系统 Python、Homebrew 或管理员权限。依赖只接受 PyPI 官方 wheels 与锁定 hashes，**禁止源码构建，也禁止 Agent 自行安装**。没装组件时设置页仍列出它，但显示关闭且不注入 Pi。
 
-文档正文的读取交给外部 Python 脚本，主进程只负责取文件与工具路径，不解析 Office/PDF。输入副本与输出都在系统临时目录，用完显式释放，不写进用户项目。GUI 的 DOCX/XLSX/PPTX 预览是**另一条独立路径**，不复用这套。
+文档正文的读取交给外部 Python 脚本，主进程只负责取文件与工具路径，不解析 Office/PDF。每次任务的输入副本与可变输出在系统临时目录，用完显式释放，不写进用户项目。大纲与所选正文按源文件内容及读取组件版本缓存到本机应用数据；各任务保留独立输出，原页渲染不共用可变缓存。GUI 的 DOCX/XLSX/PPTX 预览是**另一条独立路径**，不复用这套。
 
 ### 2.3.1 Pi packages
 
@@ -99,6 +99,8 @@ Pi 社区的 package（扩展、skills、提示模板、主题）原样交给 Pi
 **不改原状**是编辑器的核心承诺：不做格式化，Markdown 始终是原文（不经 AST 往返序列化），换行符跟随文件首个换行，BOM 原样保留，保存原地覆写以保住可执行位、硬链接与符号链接。保存前比对内容哈希，外部改过就拒绝并保留草稿。
 
 **本地课程**：Canvas 可关联一个现有学期目录，并直接登记为项目。课程映射与来源版本、内容摘要记录在本机数据库；既有课程布局可从 `.canvas-layout.json` 读取。同步只管理来源文件及生成的 Canvas 说明和索引，学习笔记与作业成果由项目文件系统保存。未管理文件先比较内容摘要再认领；本地改动冲突保留原件，Canvas 新版本另存并在同步结果中报告。远端资料消失不删除本地文件。
+
+**学习中心**：复用本地课程映射，以要求、成果、来源版本和实际检查记录区分作业草稿与已复核状态；学习记录留在本机数据库。笔记更新按当前版本精确替换段落，修改前快照和复核中间结果留在应用数据中。复习记录基于用户的实际作答和自评安排，不将笔记生成或助手复核当作用户已掌握。
 
 **通知边界**：瞬时动作的成功与失败走应用内浮窗；打开着的表单校验、持久态（连接红点、同步失败横幅、加载失败占位）与高频连续操作（终端）仍内联；后台自动动作失败只留日志，不打扰用户。
 

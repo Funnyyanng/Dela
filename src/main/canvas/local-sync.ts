@@ -22,6 +22,7 @@ import {
   findLocalCanvasBindingPath,
   localCanvasHash,
   localCanvasPath,
+  localCanvasSignature,
   readLocalCanvasBindings,
   saveLocalCanvasBindings,
   type LocalCanvasBinding,
@@ -227,6 +228,7 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
     let localHash: string | null = null;
     if (existsSync(path) && statSync(path).isFile()) localHash = await localCanvasHash(path);
     if (old?.version === material.version && localHash === old.hash) {
+      old.signature = localCanvasSignature(path);
       result.unchanged += 1;
       return path;
     }
@@ -278,6 +280,7 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
           : material.scanRoot,
         ino: stats.ino,
         dev: stats.dev,
+        signature: localCanvasSignature(saved),
       };
     };
     if (localHash === remoteHash) {

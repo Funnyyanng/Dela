@@ -59,6 +59,25 @@ beforeEach(() => {
 afterEach(() => db.close());
 
 describe('TODO 持久化与同步', () => {
+  it('persists supplied rubric and submission requirements for Canvas assignments', async () => {
+    vi.mocked(listTodoCanvasAssignments).mockResolvedValue([
+      {
+        ...assignment(1),
+        submission_types: ['online_upload'],
+        allowed_extensions: ['pdf'],
+        rubric: [{ description: '证据', points: 5 }],
+        use_rubric_for_grading: true,
+      },
+    ]);
+    await refreshTodos();
+    expect(getTodoState().items[0]?.assignmentRequirements).toMatchObject({
+      submissionTypes: ['online_upload'],
+      allowedExtensions: ['pdf'],
+      rubric: [{ description: '证据', points: 5 }],
+      useRubricForGrading: true,
+      allowedAttempts: null,
+    });
+  });
   it('历史导入不刷屏，新作业只通知一次，已读不会改变完成状态', async () => {
     await refreshTodos();
     expect(todoNotifications()).toHaveLength(0);

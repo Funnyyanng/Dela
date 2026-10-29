@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { getDatabase } from '../database';
 import { availablePath, diskName, storageDirectory } from '../storage';
 import { latestTermOf } from '../../shared/canvas';
+import { canvasAssignmentRequirements, type CanvasAssignmentRequirements } from '../../shared/todo';
 import type { CachedCourseFile, CanvasExportResult } from '../../shared/canvas';
 import { pickCourseFiles, collectCourseFileEntries } from './course-files';
 import { boundCanvasFile } from './local-bindings';
@@ -138,6 +139,7 @@ export interface StoredSource {
   dueAt?: string | null;
   updatedAt?: string | null;
   pageUrl?: string;
+  assignmentRequirements?: CanvasAssignmentRequirements;
 }
 
 const syncing = new Map<number, Promise<CanvasState>>();
@@ -254,6 +256,7 @@ async function syncCourse(id: number): Promise<CanvasState> {
         dueAt,
         url: str(a.html_url),
         updatedAt: str(a.updated_at) || null,
+        assignmentRequirements: canvasAssignmentRequirements(a),
       });
       items.push({
         id: sourceId,
@@ -645,7 +648,8 @@ export async function readCanvasPage(id: string) {
   const source = getSource(id);
   if (source.kind === 'file') throw new Error('资料不是页面');
   if (
-    source.html === undefined &&
+    (source.html === undefined ||
+      (source.kind === 'assignment' && source.assignmentRequirements === undefined)) &&
     (source.kind === 'page' || source.kind === 'assignment' || source.kind === 'discussion')
   ) {
     const path =
@@ -657,6 +661,11 @@ export async function readCanvasPage(id: string) {
     const detail = row(await (await request(`courses/${source.courseId}/${path}`)).json());
     source.html = str(detail.body ?? detail.description ?? detail.message);
     source.url = str(detail.html_url);
+    source.updatedAt = str(detail.updated_at) || source.updatedAt;
+    if (source.kind === 'assignment') {
+      source.dueAt = str(detail.due_at) || null;
+      source.assignmentRequirements = canvasAssignmentRequirements(detail);
+    }
     getDatabase()
       .prepare('UPDATE canvas_sources SET data=? WHERE id=?')
       .run(JSON.stringify(source), source.id);
@@ -668,6 +677,7 @@ export async function readCanvasPage(id: string) {
     url: source.url,
     dueAt: source.dueAt,
     updatedAt: source.updatedAt,
+    assignmentRequirements: source.assignmentRequirements,
   };
 }
 

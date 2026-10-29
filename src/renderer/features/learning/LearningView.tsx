@@ -1,0 +1,548 @@
+import { useEffect, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowUpRight,
+  BookOpen,
+  CheckCircle2,
+  Circle,
+  ClipboardCheck,
+  FileText,
+  GraduationCap,
+  RefreshCw,
+} from 'lucide-react';
+import type {
+  LearningCourse,
+  LearningNote,
+  LearningState,
+  LearningTask,
+} from '../../../shared/learning';
+import { Button } from '../../components/ui/button';
+import { SegmentedControl } from '../../components/ui/beautifului/atoms/SegmentedControl';
+import { StatusPill } from '../../components/ui/beautifului/atoms/StatusPill';
+import { DesktopOnlyNotice } from '../../components/ui/desktop-only-notice';
+import { useNavigationStore } from '../../navigation/view';
+import { useSessions } from '../../sessions/store';
+import { errorText } from '../../workspace/store';
+import { showToast } from '../../app/toasts';
+import { cn } from '../../lib/utils';
+import { learningPrompt, type LearningAction } from './learning-prompt';
+import { PracticeReview } from './PracticeReview';
+
+function dateLabel(value: string | null) {
+  return value
+    ? new Date(value).toLocaleString('zh-CN', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '未设置截止时间';
+}
+
+function Warnings({ values }: { values: string[] }) {
+  if (!values.length) return null;
+  return (
+    <div
+      className="space-y-1 rounded-control bg-orange-tint px-3 py-2 text-xs leading-relaxed text-orange"
+      role="status"
+    >
+      {values.map((value, index) => (
+        <p className="flex items-start gap-2" key={`${index}-${value}`}>
+          <AlertCircle aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          {value}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+export function LearningView() {
+  const [state, setState] = useState<LearningState | null>(null);
+  const [courseId, setCourseId] = useState<number | null>(() => {
+    const saved = Number(localStorage.getItem('learning:last-course'));
+    return Number.isInteger(saved) && saved > 0 ? saved : null;
+  });
+  const [tab, setTab] = useState<'作业' | '笔记' | '练习'>('作业');
+  const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const api = window.dela?.learning;
+    if (!api) return;
+    let active = true;
+    setLoading(true);
+    void api
+      .getState()
+      .then((next) => {
+        if (active) {
+          setState(next);
+          setError(null);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(errorText(reason));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [reload]);
+
+  if (!window.dela?.learning) {
+    return (
+      <DesktopOnlyNotice
+        title="学习中心仅在 Dela 桌面端可用"
+        description="在这里继续课程作业、整理笔记，并记录每一次真实练习。"
+      />
+    );
+  }
+
+  const course = state?.courses.find((item) => item.id === courseId) ?? state?.courses[0];
+  const tasks = state?.tasks.filter((item) => item.courseId === course?.id) ?? [];
+  const notes = state?.notes.filter((item) => item.courseId === course?.id) ?? [];
+  const coveredSources = new Set(
+    notes.flatMap((note) => note.coveredSources.map((source) => source.sourceId)),
+  );
+  const uncoveredSources =
+    course?.sources.filter(
+      (source) =>
+        source.localPath?.replaceAll('\\', '/').includes('/课件/') &&
+        !coveredSources.has(source.sourceId),
+    ) ?? [];
+  const practice = state?.practice.filter((item) => item.courseId === course?.id) ?? [];
+  const due = practice.filter((item) => Date.parse(item.dueAt) <= now);
+  const upcoming = practice
+    .filter((item) => Date.parse(item.dueAt) > now)
+    .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+
+  const start = async (action: LearningAction, target?: LearningTask | LearningNote) => {
+    if (!course || !window.dela || starting) return;
+    setStarting(true);
+    setError(null);
+    try {
+      const chat = await window.dela.session.create(course.projectId, 'library');
+      if (!chat.sessionId) throw new Error('未能创建学习对话，请重试。');
+      if (!chat.configured) throw new Error('请先在设置中配置模型，再开始学习对话。');
+      useSessions.getState().putChat(chat.sessionId, chat);
+      if (!useNavigationStore.getState().openChat(chat.sessionId, course.projectId)) return;
+      const next = await window.dela.session.ask(chat.sessionId, {
+        text: learningPrompt(course, action, target),
+        attachments: [],
+        context: [],
+      });
+      useSessions.getState().putChat(chat.sessionId, next);
+      await useSessions.getState().refresh(course.projectId);
+    } catch (reason) {
+      const description = errorText(reason);
+      setError(description);
+      showToast({ variant: 'error', title: '学习对话未能开始', description });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const openFile = (selectedCourse: LearningCourse, path: string) => {
+    const navigation = useNavigationStore.getState();
+    if (navigation.openProject(selectedCourse.projectId))
+      navigation.openDocument(path, { keep: true });
+  };
+
+  return (
+    <div className="h-full overflow-y-auto bg-surface">
+      <div className="mx-auto w-full max-w-6xl space-y-6 px-8 py-7 max-md:px-4">
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">学习中心</h1>
+            <p className="mt-1.5 text-13 text-ink-3">
+              把课程资料变成完成的作业、可靠的笔记和扎实的理解。
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {state && state.courses.length > 0 && (
+              <select
+                aria-label="选择学习课程"
+                className="h-8 max-w-72 rounded-control bg-field px-3 text-13 text-ink shadow-hairline outline-none focus-visible:outline-2 focus-visible:outline-bui-accent"
+                onChange={(event) => {
+                  localStorage.setItem('learning:last-course', event.target.value);
+                  setCourseId(Number(event.target.value));
+                }}
+                value={course?.id ?? ''}
+              >
+                {state.courses.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button
+              aria-label="刷新学习中心"
+              disabled={loading}
+              onClick={() => setReload((value) => value + 1)}
+              size="icon"
+              title="刷新学习中心"
+              variant="ghost"
+            >
+              <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
+            </Button>
+          </div>
+        </header>
+
+        {error && (
+          <p className="rounded-control bg-red-tint px-3 py-2 text-13 text-red" role="alert">
+            {error}
+          </p>
+        )}
+        {state && state.warnings.length > 0 && (
+          <details className="rounded-control bg-orange-tint text-orange">
+            <summary className="cursor-pointer rounded-control px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-bui-accent">
+              上次资料同步有 {state.warnings.length} 项提示
+            </summary>
+            <div className="px-1 pb-1">
+              <Warnings values={state.warnings} />
+            </div>
+          </details>
+        )}
+        {course && course.sources.some((source) => source.warning) && (
+          <details className="rounded-control bg-orange-tint text-orange">
+            <summary className="cursor-pointer rounded-control px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-bui-accent">
+              本课程有 {course.sources.filter((source) => source.warning).length} 份资料待核对
+            </summary>
+            <div className="px-1 pb-1">
+              <Warnings
+                values={course.sources.flatMap((source) =>
+                  source.warning ? [`${source.title}：${source.warning}`] : [],
+                )}
+              />
+            </div>
+          </details>
+        )}
+        {!state && loading ? (
+          <p className="py-16 text-center text-13 text-ink-3">正在读取课程与学习记录…</p>
+        ) : !state && error ? (
+          <p className="py-16 text-center text-13 text-ink-3">读取失败，请点击右上角刷新后重试。</p>
+        ) : !course ? (
+          <div className="mx-auto flex max-w-lg flex-col items-center gap-3 rounded-card border border-line py-12 text-center">
+            <GraduationCap className="size-8 text-ink-3" />
+            <h2 className="text-15 font-medium">从一门课程开始</h2>
+            <p className="px-6 text-13 leading-relaxed text-ink-3">
+              在资料页同步 Canvas，将课程资料添加到项目后，即可在这里完成作业、整理笔记和安排复习。
+            </p>
+            <Button onClick={() => useNavigationStore.getState().openProject('')} variant="outline">
+              打开课程资料
+              <ArrowUpRight className="size-4" />
+            </Button>
+          </div>
+        ) : (
+          <>
+            <section
+              aria-label="开始学习工作"
+              className="grid grid-cols-3 gap-3 max-lg:grid-cols-1"
+            >
+              {[
+                {
+                  action: 'assignment' as const,
+                  label: '完成作业',
+                  icon: ClipboardCheck,
+                  description: '按要求完成交付，逐项检查与复核',
+                  detail: tasks.length
+                    ? `${tasks.filter((task) => task.status !== 'checked').length} 项工作记录待完成或复核`
+                    : '尚未建立作业工作记录',
+                },
+                {
+                  action: 'notes' as const,
+                  label: '整理笔记',
+                  icon: BookOpen,
+                  description: '沿课程顺序整理，持续更新同一份笔记',
+                  detail: `${notes.length} 份已登记笔记`,
+                },
+                {
+                  action: 'study' as const,
+                  label: '带我学习',
+                  icon: GraduationCap,
+                  description: '讲解、提问、反馈，把理解落到练习',
+                  detail: `${due.length} 道练习到期`,
+                },
+              ].map(({ action, label, icon: Icon, description, detail }) => (
+                <button
+                  className="group flex items-start gap-3 rounded-card border border-line p-4 text-left transition-colors hover:border-line-strong hover:bg-hover disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-bui-accent"
+                  disabled={starting}
+                  key={action}
+                  onClick={() => void start(action)}
+                  type="button"
+                >
+                  <span className="grid size-9 shrink-0 place-items-center rounded-control bg-inset text-ink-2">
+                    <Icon className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between text-15 font-medium">
+                      {label}
+                      <ArrowUpRight className="size-4 text-ink-3" />
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-ink-3">
+                      {description}
+                    </span>
+                    <span className="mt-3 block text-xs text-ink-2">{detail}</span>
+                  </span>
+                </button>
+              ))}
+            </section>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-4">
+              <SegmentedControl
+                className="min-w-60"
+                onChange={setTab}
+                options={['作业', '笔记', '练习']}
+                value={tab}
+              />
+              <p className="text-xs text-ink-3">
+                {course.sources.length} 份课程资料 ·{' '}
+                {state?.syncedAt ? `更新于 ${dateLabel(state.syncedAt)}` : '本地学习记录'}
+              </p>
+            </div>
+            {tab === '作业' && (
+              <section aria-label="课程作业" className="space-y-4">
+                {!tasks.length ? (
+                  <EmptyState
+                    text="还没有作业工作记录"
+                    detail="点击「完成作业」，从原始要求开始建立成果与检查记录。"
+                  />
+                ) : (
+                  tasks.map((task) => (
+                    <article
+                      className="space-y-4 rounded-card border border-line p-5"
+                      key={task.id}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h2 className="text-15 font-semibold">{task.title}</h2>
+                          <p className="mt-1 text-xs text-ink-3">截止 {dateLabel(task.dueAt)}</p>
+                        </div>
+                        <StatusPill tone={task.status === 'checked' ? 'green' : 'orange'}>
+                          {task.status === 'checked' ? '已复核' : '待完成与复核'}
+                        </StatusPill>
+                      </div>
+                      <Warnings values={task.warnings} />
+                      {task.requirements.length ? (
+                        <ul className="space-y-3">
+                          {task.requirements.map((requirement) => (
+                            <li className="flex items-start gap-2 text-13" key={requirement.id}>
+                              {requirement.status === 'met' ? (
+                                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-green" />
+                              ) : (
+                                <Circle className="mt-0.5 size-4 shrink-0 text-ink-3" />
+                              )}
+                              <div>
+                                <p className="leading-relaxed">{requirement.text}</p>
+                                <p className="mt-0.5 text-xs text-ink-3">
+                                  {requirement.status === 'met' ? '已有成果与证据' : '尚待落实'} ·{' '}
+                                  {requirement.deliverableIds.length} 份成果 ·{' '}
+                                  {requirement.evidenceIds.length} 项证据
+                                </p>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-13 text-ink-3">
+                          尚未提取作业要求，继续工作时先核对原始说明。
+                        </p>
+                      )}
+                      {task.findings.some((finding) => finding.status === 'open') && (
+                        <div className="rounded-control bg-inset p-3">
+                          <h3 className="text-xs font-medium text-ink-2">待解决问题</h3>
+                          <ul className="mt-2 space-y-1 text-13 text-ink-2">
+                            {task.findings
+                              .filter((finding) => finding.status === 'open')
+                              .map((finding) => (
+                                <li key={finding.id}>· {finding.text}</li>
+                              ))}
+                          </ul>
+                        </div>
+                      )}
+                      {task.checks.length > 0 && (
+                        <div className="space-y-2 rounded-control bg-inset p-3">
+                          <h3 className="text-xs font-medium text-ink-2">复核结果</h3>
+                          {task.checks.map((check) => (
+                            <p className="text-13 leading-relaxed text-ink-2" key={check.kind}>
+                              <span className="font-medium">
+                                {
+                                  {
+                                    requirements: '要求检查',
+                                    sources: '来源核对',
+                                    calculations: '计算验证',
+                                  }[check.kind]
+                                }{' '}
+                                · {check.status === 'passed' ? '已通过' : '不适用'}
+                              </span>
+                              <span className="mt-0.5 block text-xs text-ink-3">
+                                {check.description}
+                              </span>
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {(task.deliverables.length > 0 || task.evidence.length > 0) && (
+                        <div className="flex flex-wrap gap-2">
+                          {[...task.deliverables, ...task.evidence].map((file) => (
+                            <Button
+                              key={file.id}
+                              onClick={() => openFile(course, file.path)}
+                              size="sm"
+                              title={file.description}
+                              variant="outline"
+                            >
+                              <FileText className="size-3.5" />
+                              {file.description || file.path.split(/[\\/]/).at(-1)}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+                        <p className="text-xs text-ink-3">
+                          {task.checkedAt
+                            ? `上次复核 ${dateLabel(task.checkedAt)}`
+                            : '完成后将核对成果、要求与检查证据'}
+                        </p>
+                        <Button
+                          disabled={starting}
+                          onClick={() => void start('assignment', task)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          继续完成与检查
+                          <ArrowUpRight className="size-3.5" />
+                        </Button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </section>
+            )}
+            {tab === '笔记' && (
+              <section aria-label="课程笔记" className="space-y-3">
+                {uncoveredSources.length > 0 && (
+                  <details className="rounded-card border border-line bg-inset p-4">
+                    <summary className="cursor-pointer text-13 font-medium focus-visible:outline-2 focus-visible:outline-bui-accent">
+                      尚未纳入笔记的资料 · {uncoveredSources.length} 份
+                    </summary>
+                    <p className="mt-1 text-xs text-ink-3">
+                      可在继续整理时选择补充；参考资料也可以保留原样。
+                    </p>
+                    <ul className="mt-3 space-y-1">
+                      {uncoveredSources.map((source) => (
+                        <li key={source.sourceId}>
+                          <button
+                            className="flex w-full items-center justify-between gap-2 rounded-control px-2 py-1.5 text-left text-13 text-ink-2 hover:bg-hover focus-visible:outline-2 focus-visible:outline-bui-accent"
+                            onClick={() => openFile(course, source.localPath!)}
+                            type="button"
+                          >
+                            <span className="min-w-0 truncate">{source.title}</span>
+                            <ArrowUpRight className="size-3.5 shrink-0" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {!notes.length ? (
+                  <EmptyState
+                    text="还没有课程笔记"
+                    detail="点击「整理笔记」，将课件和教材整理成可独立学习的内容。"
+                  />
+                ) : (
+                  notes.map((note) => (
+                    <article
+                      className="space-y-3 rounded-card border border-line p-5"
+                      key={note.id}
+                    >
+                      <div className="flex items-start gap-3">
+                        <BookOpen className="mt-0.5 size-5 text-ink-3" />
+                        <div className="min-w-0 flex-1">
+                          <h2 className="text-15 font-medium">{note.title}</h2>
+                          <p className="mt-1 text-xs text-ink-3">
+                            覆盖 {note.coveredSources.length} 份资料 · 更新于{' '}
+                            {dateLabel(note.updatedAt)}
+                          </p>
+                        </div>
+                      </div>
+                      <Warnings values={note.warnings} />
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          disabled={starting}
+                          onClick={() => void start('notes', note)}
+                          size="sm"
+                          variant="ghost"
+                        >
+                          {note.warnings.length ? '核对来源并更新' : '继续整理'}
+                        </Button>
+                        <Button
+                          onClick={() => openFile(course, note.path)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          打开笔记
+                          <ArrowUpRight className="size-3.5" />
+                        </Button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </section>
+            )}
+            {tab === '练习' && (
+              <section aria-label="课程练习" className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="text-15 font-medium">今天待复习 · {due.length} 题</h2>
+                  {upcoming[0] && (
+                    <p className="text-xs text-ink-3">下一次复习 {dateLabel(upcoming[0].dueAt)}</p>
+                  )}
+                </div>
+                {!due.length ? (
+                  <EmptyState
+                    text={practice.length ? '到期练习已完成' : '还没有练习题'}
+                    detail={
+                      practice.length
+                        ? '可以回顾笔记，或点击「带我学习」继续一个新主题。'
+                        : '点击「带我学习」，从讲解到独立作答，逐步建立练习记录。'
+                    }
+                  />
+                ) : (
+                  due.map((card) => (
+                    <PracticeReview
+                      card={card}
+                      key={card.id}
+                      onSubmit={async (input) => {
+                        const next = await window.dela!.learning.submitPracticeAttempt(input);
+                        setState(next);
+                        showToast({ variant: 'success', title: '已记录作答，下一次复习已安排' });
+                      }}
+                    />
+                  ))
+                )}
+              </section>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ text, detail }: { text: string; detail: string }) {
+  return (
+    <div className="rounded-card border border-dashed border-line px-5 py-10 text-center">
+      <p className="text-13 font-medium text-ink-2">{text}</p>
+      <p className="mt-2 text-xs leading-relaxed text-ink-3">{detail}</p>
+    </div>
+  );
+}

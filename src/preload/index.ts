@@ -9,6 +9,7 @@ import { backup } from './backup';
 import { llm } from './llm';
 import { capabilityApi as capability } from './capabilities';
 import { layout } from './layout';
+import { learning } from './learning';
 import { mail } from './mail';
 import { notifications } from './notifications';
 import { packages } from './packages';
@@ -49,6 +50,7 @@ contextBridge.exposeInMainWorld('dela', {
   workspace,
   session,
   layout,
+  learning,
   capability,
   packages,
   update,

@@ -8,6 +8,7 @@ import type { ChatApi } from './chat';
 import type { PackageApi } from './packages';
 import type { ConsentApi } from './consent';
 import type { LayoutApi } from './layout';
+import type { LearningApi } from './learning';
 import type { LlmApi } from './llm';
 import type { MailApi } from './mail';
 import type { NotificationsApi } from './notifications';
@@ -64,6 +65,7 @@ export interface DelaApi {
   readonly session: SessionApi;
   readonly remotes: RemoteApi;
   readonly layout: LayoutApi;
+  readonly learning: LearningApi;
   readonly search: SearchApi;
   readonly notifications: NotificationsApi;
   readonly update: UpdateApi;
@@ -270,3 +272,12 @@ export type {
 export type { TodoStatus, TodoItem, TodoState, TodoSaveInput, TodoApi } from './todo';
 
 export type { UpdateApi, UpdateSnapshot, UpdatePhase, UpdateReason } from './update';
+export type {
+  LearningApi,
+  LearningState,
+  LearningCourse,
+  LearningTask,
+  LearningNote,
+  LearningPracticeCard,
+  PracticeAttemptInput,
+} from './learning';

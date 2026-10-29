@@ -18,8 +18,9 @@ export function page<T>(items: T[], start: number, count: number) {
 // 作业描述 HTML 体积大且面向渲染，不进入模型上下文；需要正文时经 readCanvasSource 读取。
 export const slimTodo = ({
   description: _omit,
+  assignmentRequirements: _omitRequirements,
   ...item
-}: TodoItem): Omit<TodoItem, 'description'> => item;
+}: TodoItem): Omit<TodoItem, 'description' | 'assignmentRequirements'> => item;
 
 export function tool<T extends z.ZodType>(
   description: string,

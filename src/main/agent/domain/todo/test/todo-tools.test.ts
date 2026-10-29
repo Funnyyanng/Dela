@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TodoItem, TodoState } from '../../../../../shared/api';
 import { todoTools } from '../index';
+import { canvasAssignmentRequirements } from '../../../../../shared/todo';
 
 vi.mock('../../../../todo', async () => {
   const { z } = await import('zod');
@@ -118,6 +119,33 @@ describe('query_todos', () => {
 });
 
 describe('query_assignments', () => {
+  it('returns rubric details only for the requested assignment when explicitly included', () => {
+    const requirements = canvasAssignmentRequirements({
+      submission_types: ['online_upload'],
+      rubric: [{ description: '论证', points: 10 }],
+    });
+    const assignment = todoItem({
+      source: 'canvas',
+      courseId: 1,
+      assignmentId: 2,
+      assignmentRequirements: requirements,
+    });
+    state.mockReturnValue(todoState({ items: [assignment, { ...assignment, assignmentId: 3 }] }));
+    expect(todoTools.query_assignments.execute({})).toMatchObject({
+      items: [{ assignmentId: 2 }, { assignmentId: 3 }],
+    });
+    expect(JSON.stringify(todoTools.query_assignments.execute({}))).not.toContain('rubric');
+    expect(
+      todoTools.query_assignments.execute({ assignmentId: 2, includeRequirements: true }),
+    ).toMatchObject({
+      total: 1,
+      items: [{ assignmentId: 2, assignmentRequirements: requirements }],
+    });
+    state.mockReturnValue(todoState());
+    expect(todoTools.query_assignments.execute({ includeRequirements: true })).toMatchObject({
+      items: [{ assignmentRequirements: null }],
+    });
+  });
   it('filters canvas assignments by course and due range', () => {
     const result = todoTools.query_assignments.execute({
       courseId: 1,

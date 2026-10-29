@@ -56,6 +56,12 @@ it('keeps an attachment copy alive until the skill explicitly releases its job',
   const job = await prepareDocumentResource({ type: 'attachment', messageId: 1, part: '1' });
   expect(await readFile(job.input, 'utf8')).toBe('attachment bytes');
   expect(job.output).toBe(join(dirname(job.input), 'output'));
+  expect(
+    JSON.parse(await readFile(join(dirname(job.input), 'document-cache.json'), 'utf8')),
+  ).toEqual({
+    directory: join(profile.root, 'document-reading-cache'),
+  });
+  expect(job.cache.enabled).toBe(true);
   await releaseDocumentResource(job.jobId);
   expect(existsSync(dirname(job.input))).toBe(false);
 });
@@ -111,9 +117,16 @@ it('returns Canvas file metadata without downloading, identifying, or previewing
     kind: 'file',
     courseId: 1,
     title: '课件.pptx',
+    updatedAt: '2026-10-28T08:00:00Z',
   });
   const result = await readResourceTool.execute({ ref: { type: 'canvas', id: 'file:7' } });
-  expect(result).toMatchObject({ title: '课件.pptx', format: 'file', readable: false });
+  expect(result).toMatchObject({
+    title: '课件.pptx',
+    format: 'file',
+    readable: false,
+    revision: '2026-10-28T08:00:00Z',
+    updatedAt: '2026-10-28T08:00:00Z',
+  });
   expect(cachedFile).not.toHaveBeenCalled();
   expect(readCanvasSource).not.toHaveBeenCalled();
 });
@@ -223,6 +236,7 @@ it('reads linked Canvas pages and Shuiyuan sources through their body APIs', asy
     url: 'https://oc.sjtu.edu.cn/page',
     dueAt: undefined,
     updatedAt: undefined,
+    assignmentRequirements: undefined,
   });
   expect(await readResourceContent({ type: 'workspace', id })).toMatchObject({
     title: '课程页面',
@@ -250,4 +264,72 @@ it('returns attachment metadata without downloading it', async () => {
   expect(result).toMatchObject({ title: '报名.xlsx', format: 'file', readable: false });
   const { saveMailAttachment } = await import('../mail/api');
   expect(saveMailAttachment).not.toHaveBeenCalled();
+});
+
+it('returns Canvas assignment versions and explicit requirements with paginated description', async () => {
+  vi.mocked(getSource).mockReturnValue({
+    id: 'assignment:4',
+    courseId: 1,
+    kind: 'assignment',
+    title: '实验报告',
+  });
+  const requirements = {
+    submissionTypes: ['online_upload'],
+    allowedExtensions: ['pdf'],
+    allowedAttempts: 2,
+    pointsPossible: 20,
+    gradingType: 'points',
+    rubric: [{ description: '推导', points: 10 }],
+    rubricSettings: null,
+    useRubricForGrading: true,
+    peerReviews: false,
+    unlockAt: null,
+    lockAt: null,
+    lockedForUser: false,
+  };
+  vi.mocked(readCanvasPage).mockResolvedValue({
+    title: '实验报告',
+    format: 'html',
+    text: '<p>报告要求</p>',
+    url: 'https://oc.sjtu.edu.cn/assignment/4',
+    dueAt: null,
+    updatedAt: '2026-10-28T10:00:00Z',
+    assignmentRequirements: requirements,
+  });
+  expect(
+    await readResourceTool.execute({ ref: { type: 'canvas', id: 'assignment:4' }, limit: 3 }),
+  ).toMatchObject({
+    revision: '2026-10-28T10:00:00Z',
+    updatedAt: '2026-10-28T10:00:00Z',
+    dueAt: null,
+    text: '<p>',
+    nextOffset: 3,
+    assignmentRequirements: requirements,
+  });
+  vi.mocked(readCanvasPage).mockResolvedValue({
+    title: '实验报告',
+    format: 'html',
+    text: '第一版',
+    url: undefined,
+    dueAt: undefined,
+    updatedAt: null,
+    assignmentRequirements: undefined,
+  });
+  const first = (await readResourceTool.execute({
+    ref: { type: 'canvas', id: 'assignment:4' },
+  })) as { revision: string };
+  vi.mocked(readCanvasPage).mockResolvedValue({
+    title: '实验报告',
+    format: 'html',
+    text: '第二版',
+    url: undefined,
+    dueAt: undefined,
+    updatedAt: null,
+    assignmentRequirements: undefined,
+  });
+  const second = (await readResourceTool.execute({
+    ref: { type: 'canvas', id: 'assignment:4' },
+  })) as { revision: string };
+  expect(first.revision).toMatch(/^[a-f0-9]{64}$/);
+  expect(first.revision).not.toBe(second.revision);
 });

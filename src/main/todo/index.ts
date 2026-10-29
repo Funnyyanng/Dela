@@ -5,7 +5,7 @@ import { getDatabase } from '../database';
 import { loadCanvasToken } from '../credentials';
 import { checkWorkspaceSender } from '../ipc';
 import { listTodoCanvasAssignments, listTodoCanvasCourses } from '../canvas/api';
-import { canvasTodoStatus } from '../../shared/todo';
+import { canvasAssignmentRequirements, canvasTodoStatus } from '../../shared/todo';
 import { calendarEventColors } from '../../shared/api';
 import type { NotificationItem, TodoItem, TodoState } from '../../shared/api';
 import { systemNotifyItem } from '../notifications/system';
@@ -212,6 +212,7 @@ async function syncCanvasTodos(): Promise<TodoState> {
               submittedAt: typeof sub?.submitted_at === 'string' ? sub.submitted_at : null,
               url: typeof a.html_url === 'string' ? a.html_url : undefined,
               description: typeof a.description === 'string' ? a.description : undefined,
+              assignmentRequirements: canvasAssignmentRequirements(a),
               createdAt: typeof a.created_at === 'string' ? a.created_at : now,
               syncedAt: now,
               readAt: null,

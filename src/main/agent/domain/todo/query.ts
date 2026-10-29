@@ -45,10 +45,12 @@ export const queryTodosTool = tool(
 );
 
 export const queryAssignmentsTool = tool(
-  '查询 Canvas 作业的截止视图（只读本地缓存）：按课程与截止时间范围筛选，含真实提交状态；个人待办请用 query_todos。需要更新状态先调用 refresh_todos；未知与线下状态既不算已完成也不算未完成。',
+  '查询 Canvas 作业的截止视图（只读本地缓存）：按课程、作业 ID 与截止时间范围筛选，含真实提交状态；includeRequirements=true 附带已同步的提交限制与评分量表，null 表示未知。个人待办请用 query_todos。需要更新状态先调用 refresh_todos；未知与线下状态既不算已完成也不算未完成。',
   z
     .object({
       courseId: z.number().int().positive().optional(),
+      assignmentId: z.number().int().positive().optional(),
+      includeRequirements: z.boolean().default(false),
       startAt: z.string().datetime().optional(),
       endAt: z.string().datetime().optional(),
       completed: z.boolean().optional(),
@@ -56,7 +58,7 @@ export const queryAssignmentsTool = tool(
       limit,
     })
     .strict(),
-  ({ courseId, startAt, endAt, completed, offset, limit }) => {
+  ({ courseId, assignmentId, includeRequirements, startAt, endAt, completed, offset, limit }) => {
     const state = getTodoState();
     if (!state.connected)
       throw toolError('NOT_CONFIGURED', 'Canvas 未连接，无法查询作业；请先在设置中连接 Canvas');
@@ -64,12 +66,22 @@ export const queryAssignmentsTool = tool(
       (item) =>
         item.source === 'canvas' &&
         (courseId === undefined || item.courseId === courseId) &&
+        (assignmentId === undefined || item.assignmentId === assignmentId) &&
         (!startAt || (item.dueAt && Date.parse(item.dueAt) >= Date.parse(startAt))) &&
         (!endAt || (item.dueAt && Date.parse(item.dueAt) < Date.parse(endAt))) &&
         matchesCompleted(item, completed),
     );
     return {
-      ...page(items.map(slimTodo), offset, limit),
+      ...page(
+        items.map((item) => ({
+          ...slimTodo(item),
+          ...(includeRequirements
+            ? { assignmentRequirements: item.assignmentRequirements ?? null }
+            : {}),
+        })),
+        offset,
+        limit,
+      ),
       freshness: freshness('cached', state.syncedAt ?? undefined),
       coverage: coverage(
         'cached_assignments',

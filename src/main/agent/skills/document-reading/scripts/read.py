@@ -6,13 +6,18 @@ import codecs
 from collections import Counter
 from copy import deepcopy
 import hashlib
+import importlib.metadata
 import io
 import json
 import mimetypes
+import os
 from pathlib import Path
 import posixpath
 import re
+import shutil
 import sys
+import tempfile
+import time
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile, is_zipfile
 
@@ -23,6 +28,111 @@ A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 STOP_WORDS = set("the and for with from this that have will into about your they what when then than are not can use using 的 我们 一个 这个 这些 以及 可以 进行 通过 因为 所以 如果 就是 这里 然后 可能 需要 课程 内容".split())
 SECTION_CHARACTERS = 8000
+CACHE_MAX_BYTES = 512 * 1024 * 1024
+CACHE_MAX_ENTRIES = 256
+CACHE_MAX_AGE = 30 * 24 * 60 * 60
+
+
+class ExtractionCache:
+    def __init__(self, source, args):
+        self.entry = None
+        self.info = {"enabled": False, "hit": False}
+        descriptor = source.parent / "document-cache.json"
+        if not descriptor.is_file():
+            return
+        if args.pages or args.render_only:
+            self.info["reason"] = "page_renders_are_task_local"
+            return
+        self.root = Path(json.loads(descriptor.read_text(encoding="utf-8"))["directory"])
+        self.root.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        with source.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        packages = sorted((distribution.metadata["Name"], distribution.version) for distribution in importlib.metadata.distributions())
+        version = hashlib.sha256(Path(__file__).read_bytes() + json.dumps([sys.version, packages]).encode()).hexdigest()
+        artifact = {"outline": args.outline, "textPages": args.text_pages, "sections": args.sections}
+        self.info = {"enabled": True, "hit": False, "sourceHash": digest.hexdigest(), "readerVersion": version, "artifact": "outline" if args.outline else "text", "selection": args.text_pages or args.sections}
+        key = hashlib.sha256(json.dumps([digest.hexdigest(), version, artifact], sort_keys=True).encode()).hexdigest()
+        self.entry = self.root / key
+
+    def restore(self, output):
+        if self.entry is None:
+            return None
+        try:
+            result = json.loads((self.entry / "result.json").read_text(encoding="utf-8"))
+            os.utime(self.entry, None)
+            for path in self.entry.iterdir():
+                if path.name != "result.json":
+                    shutil.copyfile(path, output / path.name)
+        except FileNotFoundError:
+            return None
+        for field in ("content", "outline"):
+            if result.get(field):
+                result[field] = str(output / result[field])
+        for image in result.get("images", []):
+            image["path"] = str(output / image["path"])
+        self.info["hit"] = True
+        return result
+
+    def publish(self, result):
+        if self.entry is None or self.entry.exists():
+            return
+        if any("page" in image for image in result.get("images", [])):
+            self.info.update({"stored": False, "reason": "page_renders_are_task_local"})
+            return
+        stored = deepcopy(result)
+        files = []
+        for field in ("content", "outline"):
+            if stored.get(field):
+                files.append(Path(stored[field]))
+                stored[field] = Path(stored[field]).name
+        for image in stored.get("images", []):
+            files.append(Path(image["path"]))
+            image["path"] = Path(image["path"]).name
+        files = list(dict.fromkeys(files))
+        if sum(path.stat().st_size for path in files) > CACHE_MAX_BYTES:
+            self.info["stored"] = False
+            return
+        pending = Path(tempfile.mkdtemp(prefix=".pending-", dir=self.root))
+        try:
+            for path in files:
+                shutil.copyfile(path, pending / path.name)
+            (pending / "result.json").write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+            try:
+                pending.rename(self.entry)
+            except OSError:
+                if not self.entry.is_dir():
+                    raise
+        finally:
+            shutil.rmtree(pending, ignore_errors=True)
+
+    def finish(self, result):
+        if not self.info["hit"]:
+            self.publish(result)
+        if self.entry is not None:
+            entries = []
+            now = time.time()
+            for path in self.root.iterdir():
+                if not path.is_dir():
+                    continue
+                try:
+                    modified = path.stat().st_mtime
+                    if now - modified > (24 * 60 * 60 if path.name.startswith(".pending-") else CACHE_MAX_AGE):
+                        shutil.rmtree(path, ignore_errors=True)
+                    elif re.fullmatch(r"[a-f0-9]{64}", path.name):
+                        entries.append((modified, path, sum(file.stat().st_size for file in path.iterdir() if file.is_file())))
+                except FileNotFoundError:
+                    continue
+            total = sum(size for _, _, size in entries)
+            count = len(entries)
+            for _, path, size in sorted(entries):
+                if total <= CACHE_MAX_BYTES and count <= CACHE_MAX_ENTRIES:
+                    break
+                shutil.rmtree(path, ignore_errors=True)
+                total -= size
+                count -= 1
+        print(json.dumps({**result, "cache": self.info}, ensure_ascii=False))
 
 
 def paragraph_text(paragraph):
@@ -265,7 +375,7 @@ def write_outline(source, output, kind):
         stream.write(json.dumps(header, ensure_ascii=False)[:-1] + ',"units":[\n')
         stream.write(",\n".join(json.dumps(entry, ensure_ascii=False) for entry in entries))
         stream.write("\n]}\n")
-    print(json.dumps({"status": "indexed", "outline": str(outline), **header}, ensure_ascii=False))
+    return {"status": "indexed", "outline": str(outline), **header}
 
 
 def pdf_pages(value, count):
@@ -301,9 +411,14 @@ def main():
     source = args.input.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    cache = ExtractionCache(source, args)
+    cached = cache.restore(output)
+    if cached is not None:
+        cache.finish(cached)
+        return
     kind = document_kind(source)
     if args.outline:
-        write_outline(source, output, kind)
+        cache.finish(write_outline(source, output, kind))
         return
 
     images = []
@@ -416,7 +531,7 @@ def main():
         result.update({"pageCount": page_count, "pageIndex": page_index})
     elif units is not None:
         result.update({"unitCount": len(units), "selectedUnits": [{"number": unit["number"], **unit["locator"]} for unit in units if unit["number"] in selected]})
-    print(json.dumps(result, ensure_ascii=False))
+    cache.finish(result)
 
 
 if __name__ == "__main__":

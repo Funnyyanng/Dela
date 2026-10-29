@@ -82,13 +82,19 @@ function documentHint(ref: ResourceRef, title: string, format: string) {
 async function readDocumentRef(ref: DocumentRef, offset: number, limit: number) {
   const content = await readResourceContent(ref);
   const cached = freshness('cached');
+  const metadata = {
+    revision: content.revision ?? null,
+    updatedAt: content.updatedAt,
+    dueAt: content.dueAt,
+    assignmentRequirements: content.assignmentRequirements,
+  };
   // 图片直接作为图片消息附给视觉模型。
   if (content.format === 'image' && content.bytes && content.mime) {
     return {
       ref,
       title: content.title,
       format: 'image',
-      revision: content.revision ?? null,
+      ...metadata,
       freshness: cached,
       pageImages: [{ page: 1 }],
       images: [
@@ -100,13 +106,14 @@ async function readDocumentRef(ref: DocumentRef, offset: number, limit: number) 
       note: '图片已作为图片消息附后。',
     };
   }
-  if (content.text === undefined) return documentHint(ref, content.title, content.format);
+  if (content.text === undefined)
+    return { ...documentHint(ref, content.title, content.format), ...metadata, freshness: cached };
   const text = content.text;
   return {
     ref,
     title: content.title,
     format: content.format,
-    revision: content.revision ?? null,
+    ...metadata,
     url: content.url,
     freshness: cached,
     text: text.slice(offset, offset + limit),

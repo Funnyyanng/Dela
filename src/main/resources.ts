@@ -1,8 +1,10 @@
 import { app, shell } from 'electron';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { resourceRefSchema, type ResourceRef } from '../shared/resources';
+import type { CanvasAssignmentRequirements } from '../shared/todo';
 import { cachedFile, canvasFilePath, getSource, readCanvasPage } from './canvas/api';
 import { mailAttachment, readMailMessage, saveMailAttachment } from './mail/api';
 import { entry, importWorkspaceFiles, workspaceFilePath } from './workspace/api';
@@ -21,6 +23,9 @@ interface ResourceContent {
   mime?: string;
   revision?: string;
   url?: string;
+  updatedAt?: string | null;
+  dueAt?: string | null;
+  assignmentRequirements?: CanvasAssignmentRequirements;
 }
 
 // Canvas 只按 mime 认得出图片；与工作区图片同一套视觉模型可读的位图。
@@ -30,15 +35,24 @@ async function readCanvasResource(id: string): Promise<ResourceContent> {
   const source = getSource(id);
   if (source.kind !== 'file') {
     const page = await readCanvasPage(id);
-    return { ...page, format: page.format === 'html' ? 'html' : 'file' };
+    return {
+      ...page,
+      format: page.format === 'html' ? 'html' : 'file',
+      revision: page.updatedAt || textRevision(JSON.stringify(page)),
+    };
   }
-  if (!canvasImageMimes.includes(source.mime ?? '')) return { title: source.title, format: 'file' };
+  const metadata = { updatedAt: source.updatedAt, revision: source.updatedAt || undefined };
+  if (!canvasImageMimes.includes(source.mime ?? ''))
+    return { title: source.title, format: 'file', ...metadata };
   const cached = await cachedFile(source);
+  const bytes = await readFile(cached.path);
   return {
     title: source.title,
     format: 'image',
-    bytes: await readFile(cached.path),
+    bytes,
     mime: cached.mime,
+    ...metadata,
+    revision: source.updatedAt || createHash('sha256').update(bytes).digest('hex'),
   };
 }
 
@@ -113,12 +127,17 @@ export async function prepareDocumentFile(writeInput: (path: string) => Promise<
   try {
     const input = join(job, 'input');
     await writeInput(input);
+    await writeFile(
+      join(job, 'document-cache.json'),
+      JSON.stringify({ directory: join(app.getPath('userData'), 'document-reading-cache') }),
+    );
     return {
       jobId: basename(job),
       python: documentPython(),
       script: join(app.getPath('home'), '.dela', 'skills', DOCUMENT_SKILL, 'scripts', 'read.py'),
       input,
       output: join(job, 'output'),
+      cache: { enabled: true, scope: 'content-and-reader-version', results: 'reader-stdout' },
     };
   } catch (error) {
     await rm(job, { recursive: true, force: true });

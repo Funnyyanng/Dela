@@ -7,6 +7,7 @@ import { mailTools } from './domain/mail';
 import { shuiyuanTools } from './domain/shuiyuan';
 import { timetableTools } from './domain/timetable';
 import { todoTools } from './domain/todo';
+import { learningTools } from './domain/learning';
 import { workspaceTools } from './domain/workspace';
 import { readResourceTool } from './domain/read-resource';
 import { prepareDocumentResource, releaseDocumentResource } from '../resources';
@@ -27,6 +28,11 @@ const commandDomains = [
     commands: timetableTools,
   },
   { name: 'todo', description: '查询与管理待办、Canvas 作业', commands: todoTools },
+  {
+    name: 'learning',
+    description: '登记课程任务核对、规范笔记与复习尝试',
+    commands: learningTools,
+  },
   {
     name: 'workspace',
     description: '管理项目、关联校园资料与导入附件；普通文件用 read/write/edit/shell',

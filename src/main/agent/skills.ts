@@ -24,6 +24,10 @@ import curriculumSkill from './skills/curriculum/SKILL.md?raw';
 import mailSkill from './skills/mail/SKILL.md?raw';
 import shuiyuanSkill from './skills/shuiyuan/SKILL.md?raw';
 import todoSkill from './skills/todo/SKILL.md?raw';
+import learningSkill from './skills/learning-workflow/SKILL.md?raw';
+import assignmentWorkflow from './skills/learning-workflow/assignment.md?raw';
+import notesWorkflow from './skills/learning-workflow/notes.md?raw';
+import tutoringWorkflow from './skills/learning-workflow/tutoring.md?raw';
 
 const SKILL_ENTRY_FILE = 'SKILL.md';
 const CAPABILITY_SETUP_KEY = 'capabilities-onboarding-completed';
@@ -63,6 +67,12 @@ const BUILTIN_SKILLS: Readonly<Record<string, { path: string; content: string }[
   mail: [{ path: SKILL_ENTRY_FILE, content: mailSkill }],
   todo: [{ path: SKILL_ENTRY_FILE, content: todoSkill }],
   curriculum: [{ path: SKILL_ENTRY_FILE, content: curriculumSkill }],
+  'learning-workflow': [
+    { path: SKILL_ENTRY_FILE, content: learningSkill },
+    { path: 'assignment.md', content: assignmentWorkflow },
+    { path: 'notes.md', content: notesWorkflow },
+    { path: 'tutoring.md', content: tutoringWorkflow },
+  ],
 };
 
 let builtinEnsured = false;

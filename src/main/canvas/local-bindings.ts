@@ -26,6 +26,7 @@ export const localBindingSchema = z.object({
   scanRoot: z.string(),
   ino: z.number(),
   dev: z.number(),
+  signature: z.string().optional(),
   incoming: incomingSchema.optional(),
 });
 export type LocalCanvasBinding = z.infer<typeof localBindingSchema>;
@@ -65,9 +66,13 @@ export function localCanvasPath(root: string, path: string): string {
 }
 
 const hashes = new Map<string, { identity: string; hash: string }>();
-export async function localCanvasHash(path: string): Promise<string> {
+export function localCanvasSignature(path: string): string {
   const stats = statSync(path, { bigint: true });
-  const identity = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+  return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+}
+
+export async function localCanvasHash(path: string): Promise<string> {
+  const identity = localCanvasSignature(path);
   const cached = hashes.get(path);
   if (cached?.identity === identity) return cached.hash;
   const hash = createHash('sha256');

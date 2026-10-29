@@ -1,7 +1,11 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentSession, SessionStats } from '@earendil-works/pi-coding-agent';
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  SessionStats,
+} from '@earendil-works/pi-coding-agent';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { OpenSessionInput } from '../pi';
 import { taskStepTool } from '../task-step';
@@ -35,7 +39,7 @@ function fixture(
     prompt: vi.fn(options.prompt ?? (() => writeFile(join(root, 'chapter.md'), '# 本章完整笔记'))),
     abort: vi.fn(async () => {}),
     dispose: vi.fn(),
-    subscribe: vi.fn(() => vi.fn()),
+    subscribe: vi.fn((_listener: (event: AgentSessionEvent) => void) => vi.fn()),
     extensionRunner: { hasHandlers: () => true, emit: vi.fn(async () => {}) },
     getSessionStats: () => stats,
   };
@@ -47,10 +51,10 @@ function fixture(
   const open = vi.fn(async (_input: OpenSessionInput) => child as unknown as AgentSession);
   const record = vi.fn();
   const tool = taskStepTool(input, open, record);
-  const run = (signal?: AbortSignal) =>
+  const run = (signal?: AbortSignal, limits: Record<string, number> = {}) =>
     tool.execute(
       'step',
-      { task: '只整理第2章，课件位于 /course/hmm.pdf', outputPath: 'chapter.md' },
+      { task: '只整理第2章，课件位于 /course/hmm.pdf', outputPath: 'chapter.md', ...limits },
       signal,
       undefined,
       {} as never,
@@ -157,4 +161,56 @@ it('子任务回复过长也不会把整份产物重新塞回父上下文', asyn
   expect(data.summary).toHaveLength(2000);
   expect(data.summaryTruncated).toBe(true);
   expect(data.status).toBe('completed');
+});
+
+it('工具查找达到预算后停止，保留部分文件并返回可继续的信息', async () => {
+  const { child, run, record } = fixture();
+  child.prompt.mockImplementation(async () => {
+    await writeFile(join(root, 'chapter.md'), '已读第1—3页；未找到题干');
+    const listener = child.subscribe.mock.calls[0]![0];
+    for (let index = 0; index < 3; index++)
+      listener({
+        type: 'tool_execution_start',
+        toolCallId: String(index),
+        toolName: 'grep',
+        args: {},
+      });
+  });
+  const result = await run(undefined, { maxToolCalls: 2 });
+  expect(result.isError).toBe(true);
+  expect(result.details).toMatchObject({
+    status: 'incomplete',
+    budgetExceeded: true,
+    error: expect.stringContaining('工具调用预算'),
+  });
+  expect(await readFile(join(root, 'chapter.md'), 'utf8')).toContain('未找到题干');
+  expect(child.abort).toHaveBeenCalledOnce();
+  expect(child.dispose).toHaveBeenCalledOnce();
+  expect(record).toHaveBeenCalledOnce();
+});
+
+it('累计用量预算包括缓存且不把预算结束误报为已复核', async () => {
+  const { child, run, stats } = fixture();
+  child.prompt.mockImplementation(async () => {
+    await writeFile(join(root, 'chapter.md'), '已保存的草稿');
+    child.subscribe.mock.calls[0]![0]({
+      type: 'message_end',
+      message: child.messages[1]!,
+    } as AgentSessionEvent);
+  });
+  const result = await run(undefined, { maxTokens: stats.tokens.total });
+  expect(result.details).toMatchObject({
+    budgetExceeded: true,
+    status: 'incomplete',
+    usage: { tokens: stats.tokens.total },
+  });
+  expect(child.abort).toHaveBeenCalledOnce();
+});
+
+it('写出结果文件只表示步骤完成，不等于内容已通过复核', async () => {
+  const { run } = fixture();
+  expect((await run()).details).toMatchObject({
+    status: 'completed',
+    reviewStatus: 'not_reviewed',
+  });
 });

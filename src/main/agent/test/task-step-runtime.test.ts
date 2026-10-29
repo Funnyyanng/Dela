@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
@@ -350,3 +350,67 @@ it('连续两章各用独立临时上下文，父只持摘要并在本地合并�
   const after = await readdir(join(state.root, 'pi', 'sessions'), { recursive: true });
   expect(after.filter((file) => file.endsWith('.jsonl') && !before.includes(file))).toHaveLength(1);
 }, 15_000);
+
+it('真实SDK在最后一条回复跨过预算时保留成果但返回未完成', async () => {
+  server.enqueue(
+    call(
+      'run_task_step',
+      {
+        task: '写出本章笔记并简要返回',
+        outputPath: 'budget.md',
+        maxTokens: 1000,
+      },
+      100,
+    ),
+  );
+  server.enqueue(call('write', { path: 'budget.md', content: artifact }, 500));
+  server.enqueue(reply('本章已保存', 600));
+  server.enqueue(reply('达到预算，已保存进度', 700));
+  await session.prompt('在明确预算内分步处理');
+  expect(await readFile(join(cwd, 'budget.md'), 'utf8')).toBe(artifact);
+  const result = session.messages.find(
+    (message) => message.role === 'toolResult' && message.toolName === 'run_task_step',
+  );
+  expect(result).toMatchObject({ isError: true });
+  expect(JSON.stringify(result)).toContain('budgetExceeded');
+  expect(JSON.stringify(result)).toContain('incomplete');
+});
+
+it('真实SDK在当前回复已耗尽token预算时不再执行其中的写文件工具', async () => {
+  server.enqueue(
+    call(
+      'run_task_step',
+      {
+        task: '只处理本章',
+        outputPath: 'over-budget.md',
+        maxTokens: 1000,
+      },
+      100,
+    ),
+  );
+  server.enqueue(call('write', { path: 'over-budget.md', content: '不应写入' }, 1200));
+  server.enqueue(reply('本步停止，后续请缩小范围', 300));
+  await session.prompt('运行单章任务');
+  await expect(stat(join(cwd, 'over-budget.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(JSON.stringify(session.messages)).toContain('budgetExceeded');
+});
+
+it('真实SDK的工具预算阻止后续工具覆盖已保存的进度', async () => {
+  server.enqueue(
+    call(
+      'run_task_step',
+      {
+        task: '保存进度后停止重复查找',
+        outputPath: 'progress.md',
+        maxToolCalls: 1,
+      },
+      100,
+    ),
+  );
+  server.enqueue(call('write', { path: 'progress.md', content: '第一步已保存' }, 200));
+  server.enqueue(call('write', { path: 'progress.md', content: '超额覆盖' }, 300));
+  server.enqueue(reply('本步预算结束', 400));
+  await session.prompt('限定工具预算');
+  expect(await readFile(join(cwd, 'progress.md'), 'utf8')).toBe('第一步已保存');
+  expect(JSON.stringify(session.messages)).toContain('工具调用预算');
+});

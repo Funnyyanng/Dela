@@ -19,6 +19,7 @@ export type AppView =
   | 'classroom'
   | 'shuiyuan'
   | 'todo'
+  | 'learning'
   | 'notifications'
   | 'settings';
 

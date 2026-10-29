@@ -1,11 +1,14 @@
 """Run with Dela's installed document Python; fixtures never use user documents."""
 
 from contextlib import redirect_stdout
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import io
 import json
 from pathlib import Path
 import posixpath
+import shutil
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -65,6 +68,94 @@ class ReaderTests(unittest.TestCase):
         with patch("sys.argv", argv), redirect_stdout(stdout):
             reader.main()
         return json.loads(stdout.getvalue())
+
+    def cached_job(self, name, content=None):
+        job = self.root / name
+        job.mkdir()
+        source = job / "input"
+        source.write_bytes(content if content is not None else pdf_fixture())
+        (job / "document-cache.json").write_text(json.dumps({"directory": str(self.root / "cache")}))
+        self.output = job / "output"
+        return source
+
+    def test_cached_outline_survives_job_release_without_extracting_full_body(self):
+        first = self.cached_job("job-first")
+        with patch.dict("sys.modules", {"markitdown": None}):
+            original = self.run_reader(first, "--outline")
+        indexed = Path(original["outline"]).read_bytes()
+        self.assertFalse(original["cache"]["hit"])
+        shutil.rmtree(first.parent)
+        second = self.cached_job("job-second")
+        with patch.object(reader, "write_outline", side_effect=AssertionError("outline parsed twice")), patch.dict("sys.modules", {"markitdown": None, "pypdfium2": None}):
+            reused = self.run_reader(second, "--outline")
+        self.assertTrue(reused["cache"]["hit"])
+        self.assertEqual(Path(reused["outline"]).read_bytes(), indexed)
+        self.assertEqual(reused["cache"]["readerVersion"], original["cache"]["readerVersion"])
+        self.assertFalse((second.parent / "output/content.md").exists())
+
+    def test_selected_text_cache_is_isolated_across_concurrent_jobs(self):
+        first = self.cached_job("job-first")
+        second = self.cached_job("job-second")
+
+        def extract(source, pages):
+            completed = subprocess.run([sys.executable, str(SCRIPT), str(source), "--output", str(source.parent / "output"), "--text-pages", pages], capture_output=True, text=True, check=True)
+            return json.loads(completed.stdout)
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            jobs = [workers.submit(extract, first, "1"), workers.submit(extract, second, "2")]
+            results = [job.result() for job in jobs]
+        self.assertIn("Chapter 1 unique material", Path(results[0]["content"]).read_text())
+        self.assertNotIn("Chapter 2 unique material", Path(results[0]["content"]).read_text())
+        self.assertIn("Chapter 2 unique material", Path(results[1]["content"]).read_text())
+        self.assertNotIn("Chapter 1 unique material", Path(results[1]["content"]).read_text())
+        shutil.rmtree(first.parent)
+        third = self.cached_job("job-third")
+        with patch.dict("sys.modules", {"markitdown": None, "pypdfium2": None}):
+            reused = self.run_reader(third, "--text-pages", "1")
+        self.assertTrue(reused["cache"]["hit"])
+        self.assertEqual([entry["page"] for entry in reused["pageIndex"]], [1])
+        self.assertIn("Chapter 1 unique material", Path(reused["content"]).read_text())
+        self.assertTrue(Path(results[1]["content"]).exists())
+
+    def test_cache_invalidates_on_content_and_reader_changes_and_bounds_retention(self):
+        source = self.cached_job("job-first", b"# First chapter\nOriginal content")
+        first = self.run_reader(source, "--outline")
+        source.write_bytes(b"# Second chapter\nChanged content")
+        with patch.object(reader, "CACHE_MAX_ENTRIES", 1):
+            second = self.run_reader(source, "--outline")
+        self.assertFalse(second["cache"]["hit"])
+        self.assertNotEqual(first["cache"]["sourceHash"], second["cache"]["sourceHash"])
+        self.assertEqual(len(list((self.root / "cache").iterdir())), 1)
+        changed_script = self.root / "reader-revision.py"
+        changed_script.write_bytes(SCRIPT.read_bytes() + b"\n")
+        with patch.object(reader, "__file__", str(changed_script)):
+            revised = self.run_reader(source, "--outline")
+        self.assertFalse(revised["cache"]["hit"])
+        self.assertNotEqual(second["cache"]["readerVersion"], revised["cache"]["readerVersion"])
+
+    def test_page_renders_remain_local_even_with_a_persistent_cache(self):
+        source = self.cached_job("job-first")
+        result = self.run_reader(source, "--text-pages", "1", "--pages", "1")
+        self.assertFalse(result["cache"]["enabled"])
+        self.assertTrue(Path(result["images"][0]["path"]).is_relative_to(source.parent.resolve()))
+        self.assertFalse((self.root / "cache").exists())
+
+    def test_cached_office_content_materializes_its_embedded_images_in_the_new_job(self):
+        content = self.pptx().read_bytes()
+        source = self.cached_job("job-first", content)
+        first = self.run_reader(source, "--text-pages", "2")
+        original = Path(first["content"]).read_text()
+        shutil.rmtree(source.parent)
+        source = self.cached_job("job-second", content)
+        with patch.dict("sys.modules", {"markitdown": None}):
+            reused = self.run_reader(source, "--text-pages", "2")
+        self.assertTrue(reused["cache"]["hit"])
+        self.assertEqual(Path(reused["content"]).read_text(), original)
+        self.assertTrue(reused["images"])
+        for image in reused["images"]:
+            self.assertTrue(Path(image["path"]).is_file())
+            self.assertTrue(Path(image["path"]).is_relative_to(source.parent.resolve()))
+            self.assertIn(Path(image["path"]).name, original)
 
     def docx(self):
         source = self.root / "lecture.docx"

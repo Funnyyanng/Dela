@@ -1,12 +1,58 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../credentials', () => ({ loadCanvasToken: () => 'fixture-token' }));
+vi.mock('../../database', () => ({ getDatabase: vi.fn() }));
 
-import { getCanvasAttachment, getCanvasQuizzes } from '../api';
+import { getCanvasAttachment, getCanvasQuizzes, readCanvasPage } from '../api';
+import { getDatabase } from '../../database';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('local course source metadata', () => {
+  it('fills previously cached assignment metadata with actual versions and available rubric', async () => {
+    const source = {
+      id: 'assignment:7',
+      courseId: 9,
+      kind: 'assignment',
+      title: '报告',
+      html: '<p>旧描述</p>',
+    };
+    const run = vi.fn();
+    vi.mocked(getDatabase).mockReturnValue({
+      prepare: () => ({ get: () => ({ data: JSON.stringify(source) }), run }),
+    } as unknown as ReturnType<typeof getDatabase>);
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 7,
+          description: '<p>最新要求</p>',
+          updated_at: '2026-10-28T09:00:00Z',
+          due_at: null,
+          submission_types: ['online_upload'],
+          allowed_extensions: ['pdf'],
+          rubric: [{ description: '计算', points: 10 }],
+          use_rubric_for_grading: false,
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetch);
+    expect(await readCanvasPage('assignment:7')).toMatchObject({
+      text: '<p>最新要求</p>',
+      updatedAt: '2026-10-28T09:00:00Z',
+      dueAt: null,
+      assignmentRequirements: {
+        submissionTypes: ['online_upload'],
+        allowedExtensions: ['pdf'],
+        rubric: [{ description: '计算', points: 10 }],
+        useRubricForGrading: false,
+        allowedAttempts: null,
+      },
+    });
+    expect(run).toHaveBeenCalledWith(
+      expect.stringContaining('2026-10-28T09:00:00Z'),
+      'assignment:7',
+    );
+  });
   it('collects all quiz pages and keeps missing deadlines explicit', async () => {
     const fetch = vi
       .fn()

@@ -2,6 +2,53 @@ import type { CalendarEventColor } from './timetable';
 
 export type TodoStatus =
   'pending' | 'completed' | 'submitted' | 'graded' | 'excused' | 'resubmit' | 'offline' | 'unknown';
+export interface CanvasAssignmentRequirements {
+  submissionTypes: string[] | null;
+  allowedExtensions: string[] | null;
+  allowedAttempts: number | null;
+  pointsPossible: number | null;
+  gradingType: string | null;
+  rubric: Record<string, unknown>[] | null;
+  rubricSettings: Record<string, unknown> | null;
+  useRubricForGrading: boolean | null;
+  peerReviews: boolean | null;
+  unlockAt: string | null;
+  lockAt: string | null;
+  lockedForUser: boolean | null;
+}
+
+export function canvasAssignmentRequirements(
+  assignment: Record<string, unknown>,
+): CanvasAssignmentRequirements {
+  const strings = (value: unknown): string[] | null =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null;
+  const record = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === 'object' && !Array.isArray(value);
+  return {
+    submissionTypes: strings(assignment.submission_types),
+    allowedExtensions: strings(assignment.allowed_extensions),
+    allowedAttempts:
+      typeof assignment.allowed_attempts === 'number' ? assignment.allowed_attempts : null,
+    pointsPossible:
+      typeof assignment.points_possible === 'number' ? assignment.points_possible : null,
+    gradingType: typeof assignment.grading_type === 'string' ? assignment.grading_type : null,
+    rubric:
+      Array.isArray(assignment.rubric) && assignment.rubric.every(record)
+        ? assignment.rubric
+        : null,
+    rubricSettings: record(assignment.rubric_settings) ? assignment.rubric_settings : null,
+    useRubricForGrading:
+      typeof assignment.use_rubric_for_grading === 'boolean'
+        ? assignment.use_rubric_for_grading
+        : null,
+    peerReviews: typeof assignment.peer_reviews === 'boolean' ? assignment.peer_reviews : null,
+    unlockAt: typeof assignment.unlock_at === 'string' ? assignment.unlock_at : null,
+    lockAt: typeof assignment.lock_at === 'string' ? assignment.lock_at : null,
+    lockedForUser:
+      typeof assignment.locked_for_user === 'boolean' ? assignment.locked_for_user : null,
+  };
+}
+
 export interface TodoItem {
   id: string;
   source: 'personal' | 'canvas';
@@ -23,6 +70,7 @@ export interface TodoItem {
   url?: string;
   /** 仅 Canvas 作业：作业描述原始 HTML，随作业同步缓存，renderer 经沙箱 iframe 渲染。 */
   description?: string;
+  assignmentRequirements?: CanvasAssignmentRequirements;
   submittedAt?: string | null;
   syncedAt?: string;
 }

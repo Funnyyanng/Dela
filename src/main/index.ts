@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import { registerTodoIpc, refreshTodos } from './todo';
+import { registerLearningIpc } from './learning/ipc';
 import { registerBackupIpc } from './backup';
 import { registerCacheIpc } from './cache';
 import { registerConsentIpc } from './consent';
@@ -203,6 +204,7 @@ app
     registerSearchIpc();
     registerNotificationsIpc();
     registerTodoIpc();
+    registerLearningIpc();
     registerUpdateIpc();
     initializeNotifications();
     // 回收未被任何会话引用的内联图片（上次运行遗留的草稿图片等）。
