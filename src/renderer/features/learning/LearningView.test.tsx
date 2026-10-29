@@ -193,14 +193,30 @@ it('resets the attempt and hides the answer when the same card changes', async (
   expect(save).not.toHaveBeenCalled();
 });
 
-it('keeps global sync warnings collapsed while course actions remain available', async () => {
-  const warnings = Array.from({ length: 20 }, (_, index) => `其他课程同步提示 ${index + 1}`);
-  getState.mockResolvedValue({ ...state, warnings });
+it('keeps past cross-course sync events neutral and collapsed while course actions remain available', async () => {
+  const unavailable = Array.from({ length: 18 }, (_, index) => `其他课程未开放项目 ${index + 1}`);
+  getState.mockResolvedValue({
+    ...state,
+    syncHistory: {
+      syncedAt: '2026-10-28T08:52:00.000Z',
+      unavailable,
+      conflicts: ['其他课程上次同步有版本冲突'],
+      failed: ['其他课程上次请求超时'],
+    },
+  });
   await act(async () => root.render(<LearningView />));
   const details = host.querySelector('details')!;
   expect(details.open).toBe(false);
-  expect(details.querySelector('summary')!.textContent).toContain('上次资料同步有 20 项提示');
-  expect(details.textContent).toContain(warnings[19]);
+  expect(details.querySelector('summary')!.textContent).toContain('上次同步记录');
+  expect(details.querySelector('summary')!.textContent).toContain('10/28');
+  expect(details.querySelector('summary')!.textContent).toContain('20 项');
+  expect(details.className).not.toContain('orange');
+  expect(details.textContent).toContain('不代表当前课程缺少这些资料');
+  expect(details.textContent).toContain('当时无法获取 · 18 项');
+  expect(details.textContent).toContain('版本冲突 · 1 项');
+  expect(details.textContent).toContain('其他失败 · 1 项');
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.textContent).not.toContain('本课程有');
   for (const label of ['完成作业', '整理笔记', '带我学习']) {
     expect(button(label).disabled).toBe(false);
     expect(button(label).closest('details')).toBeNull();
@@ -210,7 +226,94 @@ it('keeps global sync warnings collapsed while course actions remain available',
     details.dispatchEvent(new Event('toggle'));
   });
   expect(details.open).toBe(true);
-  expect(details.textContent).toContain(warnings[0]);
+  expect(details.textContent).toContain(unavailable[0]);
+});
+
+it('shows current general problems separately from sync history', async () => {
+  getState.mockResolvedValue({ ...state, warnings: ['本地课程目录无法读取'] });
+  await act(async () => root.render(<LearningView />));
+  const details = host.querySelector('details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')!.textContent).toBe('学习资料有 1 项提示');
+  expect(details.querySelector('[role="status"]')!.textContent).toContain('本地课程目录无法读取');
+  expect(host.textContent).not.toContain('上次同步记录');
+});
+
+it('lists Canvas, WeChat and local references without treating provenance notices as warnings', async () => {
+  const sources = [
+    {
+      ...courses[0]!.sources[0]!,
+      provenance: '已与 Canvas 下载记录匹配',
+      notice: '本地文件与下载版本一致',
+    },
+    {
+      ...courses[0]!.sources[0]!,
+      sourceId: 'wechat-one',
+      title: '老师补充材料.pdf',
+      localPath: '/semester/随机过程/课件/老师补充材料.pdf',
+      origin: 'wechat' as const,
+      provenance: '文件下载来源为微信',
+      notice: '保留本地参考资料，不参与 Canvas 版本同步',
+    },
+    {
+      ...courses[0]!.sources[0]!,
+      sourceId: 'local-one',
+      title: '参考教材.pdf',
+      localPath: '/semester/随机过程/课件/参考教材.pdf',
+      origin: 'local' as const,
+      provenance: '本地课件目录中的参考资料',
+    },
+  ];
+  getState.mockResolvedValue({ ...state, courses: [{ ...courses[0]!, sources }] });
+  await act(async () => root.render(<LearningView />));
+  const details = host.querySelector('details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')!.textContent).toBe(
+    '资料来源 · Canvas 1 / 微信 1 / 本地参考 1',
+  );
+  expect(details.className).not.toContain('orange');
+  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.textContent).not.toContain('待核对');
+  expect(host.textContent).not.toContain('需要处理');
+  expect(details.textContent).toContain('学习笔记与作业成果独立管理');
+  await act(async () => {
+    details.open = true;
+    details.dispatchEvent(new Event('toggle'));
+  });
+  expect(details.textContent).toContain('文件下载来源为微信');
+  expect(details.textContent).toContain('本地文件与下载版本一致');
+  await act(async () => button('老师补充材料.pdf').click());
+  expect(openDocument).toHaveBeenCalledWith('/semester/随机过程/课件/老师补充材料.pdf', {
+    keep: true,
+  });
+  await act(async () => button('参考教材.pdf').click());
+  expect(openDocument).toHaveBeenCalledWith('/semester/随机过程/课件/参考教材.pdf', { keep: true });
+});
+
+it('counts only actual file problems in the course warning summary', async () => {
+  getState.mockResolvedValue({
+    ...state,
+    courses: [
+      {
+        ...courses[0]!,
+        sources: [
+          { ...courses[0]!.sources[0]!, notice: '已核对，与 Canvas 下载版本一致' },
+          {
+            ...courses[0]!.sources[0]!,
+            sourceId: 'missing-one',
+            title: '第二讲',
+            warning: '本地文件缺失',
+          },
+        ],
+      },
+    ],
+  });
+  await act(async () => root.render(<LearningView />));
+  const details = host.querySelector('details')!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector('summary')!.textContent).toBe('本课程有 1 份资料需要处理');
+  expect(details.querySelector('[role="status"]')!.textContent).toBe('第二讲：本地文件缺失');
+  expect(details.textContent).not.toContain('已核对');
 });
 
 it('starts only the selected course workflow after an explicit action', async () => {
@@ -315,7 +418,7 @@ it('surfaces newly added lecture material separately from already covered notes'
   await act(async () => button('笔记').click());
   expect(host.textContent).toContain('尚未纳入笔记的资料 · 1 份');
   expect(host.textContent).toContain('第五章');
-  expect(host.textContent).not.toContain('第一讲');
+  expect(host.querySelector('section[aria-label="课程笔记"]')!.textContent).not.toContain('第一讲');
   expect(host.textContent).not.toContain('来源有变化');
   const pending = host.querySelector(
     'section[aria-label="课程笔记"] details',

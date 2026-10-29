@@ -5,6 +5,9 @@ export interface LearningSource {
   localPath: string | null;
   version: string;
   revision: string;
+  origin?: 'canvas' | 'wechat' | 'local';
+  provenance?: string;
+  notice?: string;
   warning?: string;
 }
 
@@ -100,6 +103,12 @@ export interface LearningState {
   notes: LearningNote[];
   practice: LearningPracticeCard[];
   warnings: string[];
+  syncHistory?: {
+    syncedAt: string;
+    unavailable: string[];
+    conflicts: string[];
+    failed: string[];
+  };
 }
 
 export interface LearningApi {

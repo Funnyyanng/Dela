@@ -1,10 +1,11 @@
 import { ipcMain } from 'electron';
 import { checkWorkspaceSender } from '../ipc';
-import { getLearningState, submitLearningPracticeAttempt } from './index';
+import { getLearningState, refreshLearningSources, submitLearningPracticeAttempt } from './index';
 
 export function registerLearningIpc() {
-  ipcMain.handle('learning:get-state', (event) => {
+  ipcMain.handle('learning:get-state', async (event) => {
     checkWorkspaceSender(event);
+    await refreshLearningSources();
     return getLearningState();
   });
   ipcMain.handle('learning:submit-practice-attempt', (event, input: unknown) => {

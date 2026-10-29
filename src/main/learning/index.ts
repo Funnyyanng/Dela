@@ -14,6 +14,7 @@ import { toolError } from '../../shared/tool-errors';
 import { getDatabase } from '../database';
 import { getSource } from '../canvas/api';
 import { getLocalCanvasSyncState } from '../canvas/local-sync';
+import { learningSyncHistory } from './sync-history';
 import {
   findLocalCanvasBindingPath,
   localCanvasHash,
@@ -21,7 +22,17 @@ import {
   localCanvasSignature,
   readLocalCanvasBindings,
   saveLocalCanvasBindings,
+  type LocalCanvasBinding,
 } from '../canvas/local-bindings';
+import {
+  getLocalLearningSources,
+  refreshLocalLearningSources,
+  registerLocalLearningSourceSchema,
+  registerLocalSource,
+  verifyLocalLearningSource,
+} from './local-sources';
+
+export { registerLocalLearningSourceSchema } from './local-sources';
 
 const id = z.string().trim().min(1).max(200);
 const title = z.string().trim().min(1).max(300);
@@ -150,6 +161,25 @@ function persist(kind: string, value: { id: string }) {
     .run(`learning:${kind}:${value.id}`, JSON.stringify(value));
 }
 
+const sourceChecks = new Map<string, { identity: string; warning: string }>();
+const sourceRefreshes = new Map<string, Promise<void>>();
+
+function bindingIdentity(binding: LocalCanvasBinding, signature: string) {
+  return `${binding.version}\0${binding.hash}\0${binding.path}\0${signature}`;
+}
+
+function excludedLearningSourcePaths(courses: LearningCourse[]): Set<string> {
+  return new Set([
+    ...courses.flatMap((course) =>
+      course.sources.flatMap((source) => (source.localPath ? [source.localPath] : [])),
+    ),
+    ...records('note', storedNoteSchema).map((note) => note.path),
+    ...records('task', storedTaskSchema).flatMap((task) =>
+      task.deliverables.map((item) => item.path),
+    ),
+  ]);
+}
+
 export function getLearningCourses(): LearningCourse[] {
   const state = getLocalCanvasSyncState();
   if (!state) return [];
@@ -188,13 +218,19 @@ export function getLearningCourses(): LearningCourse[] {
         !isAbsolute(localRelative);
       if (source ? source.courseId !== course.id : !isQuiz && !retainedHere) continue;
       let localPath: string | null = null;
-      let warning = !source && !isQuiz ? '来源不在当前 Canvas 缓存中，请核对保留的本地文件' : '';
+      let warning = '';
+      let notice = !source && !isQuiz ? '已保留 Canvas 下载记录，当前缓存未提供上游状态' : '';
       try {
         localPath = findLocalCanvasBindingPath(state.root, binding);
         if (!localPath) warning = '本地来源文件缺失';
-        else if (!binding.signature) warning = '本地来源完整性尚未核对，登记覆盖时将核对所选来源';
-        else if (localCanvasSignature(localPath) !== binding.signature)
-          warning = '本地来源文件已变化，请重新核对来源版本';
+        else {
+          const signature = localCanvasSignature(localPath);
+          const check = sourceChecks.get(`${state.root}\0${binding.sourceId}`);
+          if (check?.identity === bindingIdentity(binding, signature)) warning = check.warning;
+          else if (!binding.signature) notice = '正在核对既有下载记录';
+          else if (signature !== binding.signature)
+            warning = '本地来源文件已变化，请重新核对来源版本';
+        }
       } catch (error) {
         warning = error instanceof Error ? error.message : String(error);
       }
@@ -213,11 +249,117 @@ export function getLearningCourses(): LearningCourse[] {
         localPath,
         version: binding.version,
         revision: binding.hash,
+        origin: 'canvas',
+        provenance: '已有 Canvas 同步记录，包含下载版本与文件内容校验值',
+        ...(notice ? { notice } : {}),
         ...(warning ? { warning } : {}),
       });
     }
+    const excluded = excludedLearningSourcePaths([result]);
+    for (const binding of Object.values(bindings)) {
+      excluded.add(resolve(state.root, binding.path));
+      if (binding.incoming) excluded.add(resolve(state.root, binding.incoming.path));
+    }
+    result.sources.push(...getLocalLearningSources(state.root, result, excluded));
     return result;
   });
+}
+
+export async function refreshLearningSources(selectedCourseId?: number): Promise<void> {
+  const state = getLocalCanvasSyncState();
+  if (!state) return;
+  const refreshKey = `${state.root}\0${selectedCourseId ?? 'all'}`;
+  const running = sourceRefreshes.get(refreshKey);
+  if (running) return running;
+  const refresh = (async () => {
+    const courses = getLearningCourses().filter(
+      (course) => selectedCourseId === undefined || course.id === selectedCourseId,
+    );
+    const selected = new Set(
+      courses.flatMap((course) => course.sources.map((source) => source.sourceId)),
+    );
+    const bindings = readLocalCanvasBindings(state.root);
+    const pending = Object.entries(bindings).filter(([, binding]) =>
+      selected.has(binding.sourceId),
+    );
+    const verified: { key: string; binding: LocalCanvasBinding; signature: string }[] = [];
+    await Promise.all(
+      Array.from({ length: Math.min(4, pending.length) }, async () => {
+        while (pending.length) {
+          const [key, binding] = pending.pop()!;
+          let before: string | undefined;
+          try {
+            const path = findLocalCanvasBindingPath(state.root, binding);
+            if (!path) continue;
+            before = localCanvasSignature(path);
+            if (binding.signature === before) continue;
+            const hash = await localCanvasHash(path);
+            if (localCanvasSignature(path) !== before) continue;
+            sourceChecks.set(`${state.root}\0${binding.sourceId}`, {
+              identity: bindingIdentity(binding, before),
+              warning:
+                hash === binding.hash
+                  ? ''
+                  : '本地来源内容与 Canvas 下载记录不一致，请核对本地修改或同步冲突',
+            });
+            if (hash === binding.hash) verified.push({ key, binding, signature: before });
+          } catch {
+            if (before)
+              sourceChecks.set(`${state.root}\0${binding.sourceId}`, {
+                identity: bindingIdentity(binding, before),
+                warning: '无法读取本地资料，未完成内容核对；请检查文件访问权限后重试',
+              });
+          }
+        }
+      }),
+    );
+    if (verified.length) {
+      const current = readLocalCanvasBindings(state.root);
+      let changed = false;
+      for (const { key, binding, signature } of verified) {
+        const latest = current[key];
+        if (
+          latest &&
+          latest.version === binding.version &&
+          latest.hash === binding.hash &&
+          latest.path === binding.path
+        ) {
+          latest.signature = signature;
+          changed = true;
+        }
+      }
+      if (changed) saveLocalCanvasBindings(state.root, current);
+    }
+    const excluded = excludedLearningSourcePaths(
+      courses.map((course) => ({
+        ...course,
+        sources: course.sources.filter((source) => !source.sourceId.startsWith('local:')),
+      })),
+    );
+    for (const binding of Object.values(readLocalCanvasBindings(state.root))) {
+      excluded.add(resolve(state.root, binding.path));
+      if (binding.incoming) excluded.add(resolve(state.root, binding.incoming.path));
+    }
+    for (const course of courses) await refreshLocalLearningSources(state.root, course, excluded);
+  })();
+  sourceRefreshes.set(refreshKey, refresh);
+  try {
+    await refresh;
+  } finally {
+    sourceRefreshes.delete(refreshKey);
+  }
+}
+
+export async function registerLocalLearningSource(input: unknown) {
+  const value = registerLocalLearningSourceSchema.parse(input);
+  const { course, root } = currentCourse(value.courseId);
+  const excluded = excludedLearningSourcePaths([
+    {
+      ...course,
+      sources: course.sources.filter((source) => !source.sourceId.startsWith('local:')),
+    },
+  ]);
+  return registerLocalSource(root, course, value, excluded);
 }
 
 function currentCourse(value: number): { course: LearningCourse; root: string } {
@@ -348,12 +490,7 @@ export function getLearningState(): LearningState {
   const tasks = queryLearningRecords('tasks', undefined, courses) as LearningTask[];
   const notes = queryLearningRecords('notes', undefined, courses) as LearningNote[];
   const practice = queryLearningRecords('practice', undefined, courses) as LearningPracticeCard[];
-  const warnings = state
-    ? [
-        ...(state.lastResult?.failed ?? []),
-        ...(state.lastResult?.conflicts.map((item) => `${item.path}：${item.reason}`) ?? []),
-      ]
-    : ['请先在 Canvas 关联本地课程文件夹'];
+  const warnings = state ? [] : ['请先在 Canvas 关联本地课程文件夹'];
   if (tasks.length > 200 || notes.length > 200 || practice.length > 200)
     warnings.push('学习中心显示每类前 200 条，完整记录可通过学习命令分页查询');
   return {
@@ -364,6 +501,7 @@ export function getLearningState(): LearningState {
     notes: notes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 200),
     practice: practice.sort((a, b) => a.dueAt.localeCompare(b.dueAt)).slice(0, 200),
     warnings,
+    syncHistory: learningSyncHistory(state),
   };
 }
 
@@ -372,15 +510,17 @@ export function getLearningOverview(selectedCourseId?: number) {
   const tasks = records('task', storedTaskSchema);
   const notes = records('note', storedNoteSchema);
   const practice = records('practice', storedPracticeSchema);
+  const history = learningSyncHistory(state);
   return {
     root: state?.root ?? null,
     syncedAt: state?.syncedAt ?? null,
-    warnings: state
-      ? [
-          ...(state.lastResult?.failed ?? []),
-          ...(state.lastResult?.conflicts.map((item) => `${item.path}：${item.reason}`) ?? []),
-        ]
-      : ['请先在 Canvas 关联本地课程文件夹'],
+    warnings: state ? [] : ['请先在 Canvas 关联本地课程文件夹'],
+    syncHistory: history && {
+      syncedAt: history.syncedAt,
+      unavailable: history.unavailable.length,
+      conflicts: history.conflicts.length,
+      failed: history.failed.length,
+    },
     courses: getLearningCourses()
       .filter((course) => selectedCourseId === undefined || course.id === selectedCourseId)
       .map(({ sources, ...course }) => ({
@@ -412,8 +552,12 @@ async function verifyLearningSources(root: string, course: LearningCourse, sourc
   const bindings = readLocalCanvasBindings(root);
   const verified: string[] = [];
   for (const sourceId of new Set(sourceIds)) {
-    if (!course.sources.some((source) => source.sourceId === sourceId))
-      throw toolError('NOT_FOUND', `来源不在当前课程映射中：${sourceId}`);
+    const source = course.sources.find((source) => source.sourceId === sourceId);
+    if (!source) throw toolError('NOT_FOUND', `来源不在当前课程映射中：${sourceId}`);
+    if (sourceId.startsWith('local:')) {
+      await verifyLocalLearningSource(root, course.id, source);
+      continue;
+    }
     const binding = Object.values(bindings).find((item) => item.sourceId === sourceId);
     const path = binding && findLocalCanvasBindingPath(root, binding);
     if (!binding || !path) throw toolError('VERSION_CONFLICT', `本地来源文件不可用：${sourceId}`);

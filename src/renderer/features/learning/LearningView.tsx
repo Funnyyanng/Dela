@@ -124,6 +124,20 @@ export function LearningView() {
   const upcoming = practice
     .filter((item) => Date.parse(item.dueAt) > now)
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
+  const syncHistory = state?.syncHistory;
+  const historyGroups = syncHistory
+    ? [
+        { label: '当时无法获取', values: syncHistory.unavailable },
+        { label: '版本冲突', values: syncHistory.conflicts },
+        { label: '其他失败', values: syncHistory.failed },
+      ].filter((group) => group.values.length > 0)
+    : [];
+  const historyCount = historyGroups.reduce((count, group) => count + group.values.length, 0);
+  const sourceOrigins = [
+    { origin: 'canvas', label: 'Canvas' },
+    { origin: 'wechat', label: '微信' },
+    { origin: 'local', label: '本地参考' },
+  ] as const;
 
   const start = async (action: LearningAction, target?: LearningTask | LearningNote) => {
     if (!course || !window.dela || starting) return;
@@ -203,10 +217,32 @@ export function LearningView() {
             {error}
           </p>
         )}
+        {historyCount > 0 && (
+          <details className="rounded-control border border-line bg-inset text-ink-3">
+            <summary className="cursor-pointer rounded-control px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-bui-accent">
+              上次同步记录 · {dateLabel(syncHistory!.syncedAt)} · {historyCount} 项
+            </summary>
+            <div className="space-y-3 px-3 pb-3 text-xs leading-relaxed">
+              <p>这是上次同步所有课程时的记录，不代表当前课程缺少这些资料。</p>
+              {historyGroups.map((group) => (
+                <div key={group.label}>
+                  <h2 className="font-medium text-ink-2">
+                    {group.label} · {group.values.length} 项
+                  </h2>
+                  <ul className="mt-1 list-inside list-disc space-y-1">
+                    {group.values.map((value, index) => (
+                      <li key={`${index}-${value}`}>{value}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
         {state && state.warnings.length > 0 && (
           <details className="rounded-control bg-orange-tint text-orange">
             <summary className="cursor-pointer rounded-control px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-bui-accent">
-              上次资料同步有 {state.warnings.length} 项提示
+              学习资料有 {state.warnings.length} 项提示
             </summary>
             <div className="px-1 pb-1">
               <Warnings values={state.warnings} />
@@ -216,7 +252,7 @@ export function LearningView() {
         {course && course.sources.some((source) => source.warning) && (
           <details className="rounded-control bg-orange-tint text-orange">
             <summary className="cursor-pointer rounded-control px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-bui-accent">
-              本课程有 {course.sources.filter((source) => source.warning).length} 份资料待核对
+              本课程有 {course.sources.filter((source) => source.warning).length} 份资料需要处理
             </summary>
             <div className="px-1 pb-1">
               <Warnings
@@ -224,6 +260,51 @@ export function LearningView() {
                   source.warning ? [`${source.title}：${source.warning}`] : [],
                 )}
               />
+            </div>
+          </details>
+        )}
+        {course && course.sources.length > 0 && (
+          <details className="rounded-control border border-line bg-inset text-ink-3">
+            <summary className="cursor-pointer rounded-control px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-bui-accent">
+              资料来源 ·{' '}
+              {sourceOrigins
+                .map(
+                  ({ origin, label }) =>
+                    `${label} ${course.sources.filter((source) => (source.origin ?? 'canvas') === origin).length}`,
+                )
+                .join(' / ')}
+            </summary>
+            <div className="space-y-3 px-3 pb-3 text-xs leading-relaxed">
+              <p>Canvas、微信和本地参考资料都可用于学习；学习笔记与作业成果独立管理。</p>
+              <ul className="space-y-2">
+                {course.sources.map((source) => (
+                  <li className="rounded-control bg-surface p-2" key={source.sourceId}>
+                    <div className="flex items-start justify-between gap-2">
+                      {source.localPath ? (
+                        <button
+                          className="flex min-w-0 items-start gap-1.5 text-left text-13 text-ink-2 hover:underline focus-visible:outline-2 focus-visible:outline-bui-accent"
+                          onClick={() => openFile(course, source.localPath!)}
+                          type="button"
+                        >
+                          <span className="break-all">{source.title}</span>
+                          <ArrowUpRight className="mt-0.5 size-3.5 shrink-0" />
+                        </button>
+                      ) : (
+                        <span className="text-13 text-ink-2">{source.title}</span>
+                      )}
+                      <span className="shrink-0">
+                        {
+                          sourceOrigins.find(
+                            ({ origin }) => origin === (source.origin ?? 'canvas'),
+                          )!.label
+                        }
+                      </span>
+                    </div>
+                    {source.provenance && <p className="mt-1">{source.provenance}</p>}
+                    {source.notice && <p className="mt-1">{source.notice}</p>}
+                  </li>
+                ))}
+              </ul>
             </div>
           </details>
         )}
@@ -306,7 +387,7 @@ export function LearningView() {
               />
               <p className="text-xs text-ink-3">
                 {course.sources.length} 份课程资料 ·{' '}
-                {state?.syncedAt ? `更新于 ${dateLabel(state.syncedAt)}` : '本地学习记录'}
+                {state?.syncedAt ? `Canvas 上次同步 ${dateLabel(state.syncedAt)}` : '本地学习记录'}
               </p>
             </div>
             {tab === '作业' && (

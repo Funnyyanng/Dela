@@ -6,6 +6,9 @@ import {
   inspectLearningFilesSchema,
   practiceAttemptSchema,
   queryLearningRecords,
+  refreshLearningSources,
+  registerLocalLearningSource,
+  registerLocalLearningSourceSchema,
   saveLearningNote,
   saveLearningNoteSchema,
   saveLearningPractice,
@@ -23,12 +26,16 @@ export const learningTools = {
   get_learning_state: tool(
     '读取本地课程学习概况、课程目录和中间审阅工作目录。只返回记录数和告警；详细资料与学习记录分别用 query_learning_sources/query_learning_records 分页查询。已核对状态表示成果通过已登记要求的检查，不代表提交或掌握。',
     z.object({ courseId: courseId.optional() }).strict(),
-    ({ courseId }) => getLearningOverview(courseId),
+    async ({ courseId }) => {
+      await refreshLearningSources(courseId);
+      return getLearningOverview(courseId);
+    },
   ),
   query_learning_sources: tool(
-    '分页列出一个已映射课程的本地来源路径、同步版本和冲突告警，不读取正文。先按标题筛选，再只读取当前任务需要的资料；大文件按页或范围读取。',
+    '分页列出课程资料的来源、证据说明、本地路径、版本和实际冲突，不读取正文。包括 Canvas、微信及本地参考资料；origin 表示取得渠道，不代表内容正确性。先按标题筛选，再只读取当前任务需要的页段。',
     z.object({ courseId, query, offset, limit }).strict(),
-    ({ courseId, query, offset, limit }) => {
+    async ({ courseId, query, offset, limit }) => {
+      await refreshLearningSources(courseId);
       const course = getLearningCourses().find((item) => item.id === courseId);
       return page(
         (course?.sources ?? []).filter((item) =>
@@ -94,6 +101,11 @@ export const learningTools = {
     '核对指定课程内成果或证据文件的 SHA-256 版本，用于保存任务记录；仅处理指定文件，不扫描课程正文。',
     inspectLearningFilesSchema,
     inspectLearningFiles,
+  ),
+  register_learning_source: tool(
+    '登记课程内已有的微信附件、Canvas 本地归档或其他参考资料，记录取得渠道和证据说明；不移动或修改原件。只有用户明确指认或下载记录等真实证据支持时才标为 wechat/canvas，不能凭文件名推断；未知渠道用 local。该标签不代表作者、内容正确性或已联网确认最新版本。不能登记学习笔记或已记录的作业成果作为原始资料。',
+    registerLocalLearningSourceSchema,
+    registerLocalLearningSource,
   ),
   save_learning_task: tool(
     '创建或完整更新本地学习任务。逐条登记要求、成果与证据的关联和审阅问题。draft 可包含待完成项；checked 需要全部要求已满足、全部问题关闭、成果证据存在且 SHA-256 匹配，证据 description 给出页码/行号/验证结果。有 assignmentSourceId 时，checked 必须提供实际审阅的 assignmentSourceVersion（来自 query_learning_sources），或沿用同一来源已有草稿记录的版本；版本须与当前来源一致。checks 须明确复核 requirements、sources、calculations 三类，计算不适用须说明。不提交 Canvas 作业。',
