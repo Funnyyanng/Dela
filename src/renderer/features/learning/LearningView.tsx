@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowUpRight,
@@ -21,11 +21,11 @@ import { SegmentedControl } from '../../components/ui/beautifului/atoms/Segmente
 import { StatusPill } from '../../components/ui/beautifului/atoms/StatusPill';
 import { DesktopOnlyNotice } from '../../components/ui/desktop-only-notice';
 import { useNavigationStore } from '../../navigation/view';
-import { useSessions } from '../../sessions/store';
 import { errorText } from '../../workspace/store';
 import { showToast } from '../../app/toasts';
 import { cn } from '../../lib/utils';
-import { learningPrompt, type LearningAction } from './learning-prompt';
+import type { LearningAction, LearningSelection } from './learning-prompt';
+import { startLearning } from './start-learning';
 import { PracticeReview } from './PracticeReview';
 
 function dateLabel(value: string | null) {
@@ -65,9 +65,12 @@ export function LearningView() {
   const [tab, setTab] = useState<'作业' | '笔记' | '练习'>('作业');
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [now, setNow] = useState(Date.now);
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [sourceQuery, setSourceQuery] = useState('');
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -110,6 +113,25 @@ export function LearningView() {
   const course = state?.courses.find((item) => item.id === courseId) ?? state?.courses[0];
   const tasks = state?.tasks.filter((item) => item.courseId === course?.id) ?? [];
   const notes = state?.notes.filter((item) => item.courseId === course?.id) ?? [];
+  const assignments =
+    course?.sources.filter(
+      (source) =>
+        (source.kind === 'assignment' || source.sourceId.startsWith('assignment:')) &&
+        source.kind !== 'quiz' &&
+        !source.sourceId.startsWith('quiz:'),
+    ) ?? [];
+  const materials =
+    course?.sources.filter(
+      (source) =>
+        source.kind !== 'assignment' &&
+        source.kind !== 'quiz' &&
+        !source.sourceId.startsWith('assignment:') &&
+        !source.sourceId.startsWith('quiz:'),
+    ) ?? [];
+  const selectedMaterials = materials.filter((source) => selectedSources.includes(source.sourceId));
+  const visibleMaterials = materials.filter((source) =>
+    source.title.toLocaleLowerCase().includes(sourceQuery.trim().toLocaleLowerCase()),
+  );
   const coveredSources = new Set(
     notes.flatMap((note) => note.coveredSources.map((source) => source.sourceId)),
   );
@@ -139,28 +161,23 @@ export function LearningView() {
     { origin: 'local', label: '本地参考' },
   ] as const;
 
-  const start = async (action: LearningAction, target?: LearningTask | LearningNote) => {
-    if (!course || !window.dela || starting) return;
+  const start = async (
+    action: LearningAction,
+    target?: LearningTask | LearningNote,
+    selection?: LearningSelection,
+  ) => {
+    if (!course || !window.dela || startingRef.current) return;
+    startingRef.current = true;
     setStarting(true);
     setError(null);
     try {
-      const chat = await window.dela.session.create(course.projectId, 'library');
-      if (!chat.sessionId) throw new Error('未能创建学习对话，请重试。');
-      if (!chat.configured) throw new Error('请先在设置中配置模型，再开始学习对话。');
-      useSessions.getState().putChat(chat.sessionId, chat);
-      if (!useNavigationStore.getState().openChat(chat.sessionId, course.projectId)) return;
-      const next = await window.dela.session.ask(chat.sessionId, {
-        text: learningPrompt(course, action, target),
-        attachments: [],
-        context: [],
-      });
-      useSessions.getState().putChat(chat.sessionId, next);
-      await useSessions.getState().refresh(course.projectId);
+      await startLearning(course, action, target, selection);
     } catch (reason) {
       const description = errorText(reason);
       setError(description);
       showToast({ variant: 'error', title: '学习对话未能开始', description });
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
   };
@@ -189,6 +206,8 @@ export function LearningView() {
                 onChange={(event) => {
                   localStorage.setItem('learning:last-course', event.target.value);
                   setCourseId(Number(event.target.value));
+                  setSelectedSources([]);
+                  setSourceQuery('');
                 }}
                 value={course?.id ?? ''}
               >
@@ -335,7 +354,7 @@ export function LearningView() {
                   action: 'assignment' as const,
                   label: '完成作业',
                   icon: ClipboardCheck,
-                  description: '按要求完成交付，逐项检查与复核',
+                  description: '选择具体作业，一键完成或检查答案',
                   detail: tasks.length
                     ? `${tasks.filter((task) => task.status !== 'checked').length} 项工作记录待完成或复核`
                     : '尚未建立作业工作记录',
@@ -344,7 +363,7 @@ export function LearningView() {
                   action: 'notes' as const,
                   label: '整理笔记',
                   icon: BookOpen,
-                  description: '沿课程顺序整理，持续更新同一份笔记',
+                  description: '选择一份或多份资料，一键整理笔记',
                   detail: `${notes.length} 份已登记笔记`,
                 },
                 {
@@ -359,7 +378,11 @@ export function LearningView() {
                   className="group flex items-start gap-3 rounded-card border border-line p-4 text-left transition-colors hover:border-line-strong hover:bg-hover disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-bui-accent"
                   disabled={starting}
                   key={action}
-                  onClick={() => void start(action)}
+                  onClick={() => {
+                    if (action === 'assignment') setTab('作业');
+                    else if (action === 'notes') setTab('笔记');
+                    else void start(action);
+                  }}
                   type="button"
                 >
                   <span className="grid size-9 shrink-0 place-items-center rounded-control bg-inset text-ink-2">
@@ -392,10 +415,72 @@ export function LearningView() {
             </div>
             {tab === '作业' && (
               <section aria-label="课程作业" className="space-y-4">
-                {!tasks.length ? (
+                {assignments.length > 0 && (
+                  <section aria-label="选择作业" className="rounded-card border border-line p-4">
+                    <h2 className="text-15 font-medium">选择要处理的作业</h2>
+                    <p className="mt-1 text-xs text-ink-3">
+                      自动带上原题、附件和已有答案，点击后直接开始。
+                    </p>
+                    <ul className="mt-3 divide-y divide-line">
+                      {assignments.map((source) => {
+                        const task = tasks.find(
+                          (item) => item.assignmentSourceId === source.sourceId,
+                        );
+                        return (
+                          <li
+                            className="flex flex-wrap items-center justify-between gap-3 py-3"
+                            key={source.sourceId}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="break-words text-13 font-medium">{source.title}</p>
+                              {task && (
+                                <p className="mt-1 text-xs text-ink-3">
+                                  {task.status === 'checked' ? '已有复核记录' : '已有作业进度'}
+                                </p>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {source.localPath && (
+                                <Button
+                                  onClick={() => openFile(course, source.localPath!)}
+                                  size="sm"
+                                  variant="ghost"
+                                  aria-label={`查看原题：${source.title}`}
+                                >
+                                  查看原题
+                                </Button>
+                              )}
+                              <Button
+                                disabled={starting}
+                                onClick={() =>
+                                  void start('assignment', task, { sources: [source] })
+                                }
+                                size="sm"
+                                variant="outline"
+                                aria-label={`完成作业：${source.title}`}
+                              >
+                                完成作业
+                              </Button>
+                              <Button
+                                disabled={starting}
+                                onClick={() => void start('review', task, { sources: [source] })}
+                                size="sm"
+                                variant="outline"
+                                aria-label={`检查答案：${source.title}`}
+                              >
+                                检查答案
+                              </Button>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                )}
+                {!tasks.length && !assignments.length ? (
                   <EmptyState
-                    text="还没有作业工作记录"
-                    detail="点击「完成作业」，从原始要求开始建立成果与检查记录。"
+                    text="还没有可选择的作业"
+                    detail="同步 Canvas 作业，或在项目文件列表中选中本地作业文件后开始。"
                   />
                 ) : (
                   tasks.map((task) => (
@@ -511,6 +596,81 @@ export function LearningView() {
             )}
             {tab === '笔记' && (
               <section aria-label="课程笔记" className="space-y-3">
+                {materials.length > 0 && (
+                  <section
+                    aria-label="选择笔记资料"
+                    className="space-y-3 rounded-card border border-line p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <h2 className="text-15 font-medium">选择要整理的资料</h2>
+                        <p className="mt-1 text-xs text-ink-3">
+                          可选一份或多份，自动沿用相关的已有笔记。
+                        </p>
+                      </div>
+                      <Button
+                        disabled={starting || selectedMaterials.length === 0}
+                        onClick={() =>
+                          void start('notes', undefined, { sources: selectedMaterials })
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        整理所选笔记
+                      </Button>
+                    </div>
+                    <input
+                      aria-label="筛选笔记资料"
+                      className="h-8 w-full rounded-control bg-field px-3 text-13 shadow-hairline outline-none focus-visible:outline-2 focus-visible:outline-bui-accent"
+                      placeholder="搜索资料名称…"
+                      value={sourceQuery}
+                      onChange={(event) => setSourceQuery(event.target.value)}
+                    />
+                    <div className="max-h-64 space-y-1 overflow-y-auto">
+                      {visibleMaterials.map((source) => (
+                        <label
+                          className="flex cursor-pointer items-start gap-3 rounded-control px-2 py-2 hover:bg-hover"
+                          key={source.sourceId}
+                        >
+                          <input
+                            type="checkbox"
+                            aria-label={`选择资料：${source.title}`}
+                            className="mt-0.5 size-4 shrink-0 accent-bui-accent"
+                            checked={selectedSources.includes(source.sourceId)}
+                            onChange={(event) =>
+                              setSelectedSources((previous) =>
+                                event.target.checked
+                                  ? [...previous, source.sourceId]
+                                  : previous.filter((id) => id !== source.sourceId),
+                              )
+                            }
+                          />
+                          <span className="min-w-0 text-13">
+                            <span className="block break-words">{source.title}</span>
+                            <span className="mt-0.5 block text-xs text-ink-3">
+                              {coveredSources.has(source.sourceId) ? '已有相关笔记' : '尚未整理'}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                      {!visibleMaterials.length && (
+                        <p className="py-3 text-xs text-ink-3">没有匹配的资料</p>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-ink-3">
+                      <p aria-live="polite">已选 {selectedMaterials.length} 份资料</p>
+                      {selectedMaterials.length > 0 && (
+                        <button
+                          className="hover:underline"
+                          onClick={() => setSelectedSources([])}
+                          type="button"
+                        >
+                          清空选择
+                        </button>
+                      )}
+                    </div>
+                  </section>
+                )}
                 {uncoveredSources.length > 0 && (
                   <details className="rounded-card border border-line bg-inset p-4">
                     <summary className="cursor-pointer text-13 font-medium focus-visible:outline-2 focus-visible:outline-bui-accent">
@@ -538,7 +698,7 @@ export function LearningView() {
                 {!notes.length ? (
                   <EmptyState
                     text="还没有课程笔记"
-                    detail="点击「整理笔记」，将课件和教材整理成可独立学习的内容。"
+                    detail="勾选上方资料，再点击「整理所选笔记」。本地文件也可从项目文件列表直接开始。"
                   />
                 ) : (
                   notes.map((note) => (

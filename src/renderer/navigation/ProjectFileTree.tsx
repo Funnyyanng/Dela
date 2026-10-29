@@ -36,6 +36,7 @@ import { remoteAccent } from './remote-color';
 import { remoteTitle, useRemoteTree } from './remote-tree';
 import { showToast } from '../app/toasts';
 import { errorText, useWorkspaceStore } from '../workspace/store';
+import { FileLearningActions } from './FileLearningActions';
 
 export type { EntryAction };
 
@@ -105,6 +106,9 @@ export function ProjectFileTree({
   const [localError, setLocalError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchVersion, setSearchVersion] = useState(0);
+  const [clickedSelection, setClickedSelection] = useState<string | null>(null);
+  const selectedId = clickedSelection ?? selected;
+  useEffect(() => setClickedSelection(null), [selected, rootId]);
   const searchKey = `${rootId ?? ''}\0${query.trim()}`;
   useEffect(() => {
     if (!query.trim()) return;
@@ -283,6 +287,7 @@ export function ProjectFileTree({
       onExpand(id, !expanded.includes(id));
       return;
     }
+    if (entries.some((entry) => entry.id === id && !entry.remoteId)) setClickedSelection(id);
     rememberResult(id);
     onSelect(id);
   };
@@ -337,8 +342,37 @@ export function ProjectFileTree({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+  const selectedEntry = visible.find((entry) => entry.id === selectedId);
+  let learningProject = selectedEntry;
+  const ancestorIds = new Set<string>();
+  while (
+    learningProject &&
+    learningProject.kind !== 'project' &&
+    !ancestorIds.has(learningProject.id)
+  ) {
+    ancestorIds.add(learningProject.id);
+    learningProject = entries.find((entry) => entry.id === learningProject?.parentId);
+  }
+  const selectedPath = selectedEntry?.path ?? selectedEntry?.id ?? '';
+  const absolutePath = /^(?:\/|[A-Za-z]:[\\/])/.test(selectedPath);
+  const learningSelection =
+    window.dela?.learning &&
+    !archived &&
+    !learningProject?.remoteId &&
+    learningProject?.kind === 'project' &&
+    selectedEntry &&
+    !selectedEntry.remoteId &&
+    absolutePath &&
+    ((selectedEntry.kind === 'file' &&
+      /\.(pdf|pptx?|docx?|md|txt|tex|csv|xlsx?|html?|png|jpe?g|webp)$/i.test(selectedPath)) ||
+      (selectedEntry.kind === 'folder' && /[\\/](作业|大作业)[\\/][^\\/]+/.test(selectedPath)))
+      ? selectedEntry
+      : null;
   return (
     <>
+      {learningSelection && learningProject && (
+        <FileLearningActions entry={learningSelection} projectId={learningProject.id} />
+      )}
       {localError && (
         <p role="alert" className="px-3 py-2 text-xs text-red">
           {localError}
@@ -364,7 +398,7 @@ export function ProjectFileTree({
       <Explorer
         label="我的内容"
         items={filtered}
-        selected={selected}
+        selected={selectedId}
         expanded={open}
         onExpand={onExpand}
         onSelect={selectNode}

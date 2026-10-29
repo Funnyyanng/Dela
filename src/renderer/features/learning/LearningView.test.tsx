@@ -2,7 +2,12 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { LearningCourse, LearningState } from '../../../shared/learning';
+import type {
+  LearningCourse,
+  LearningSource,
+  LearningState,
+  LearningTask,
+} from '../../../shared/learning';
 import { LearningView } from './LearningView';
 import { learningPrompt } from './learning-prompt';
 import { PracticeReview } from './PracticeReview';
@@ -324,7 +329,7 @@ it('starts only the selected course workflow after an explicit action', async ()
     picker.dispatchEvent(new Event('change', { bubbles: true }));
   });
   expect(createSession).not.toHaveBeenCalled();
-  await act(async () => button('整理笔记').click());
+  await act(async () => button('带我学习').click());
   expect(createSession).toHaveBeenCalledWith('project-two', 'library');
   expect(openChat).toHaveBeenCalledWith('session-one', 'project-two');
   const input = ask.mock.calls[0]![1];
@@ -346,10 +351,10 @@ it('remembers the last course without starting a workflow automatically', async 
 it('shows a readable failure without sending when course chat creation fails', async () => {
   createSession.mockRejectedValue(new Error('项目目录不存在'));
   await act(async () => root.render(<LearningView />));
-  await act(async () => button('完成作业').click());
+  await act(async () => button('带我学习').click());
   expect(ask).not.toHaveBeenCalled();
   expect(host.querySelector('[role="alert"]')?.textContent).toContain('项目目录不存在');
-  expect(button('完成作业').disabled).toBe(false);
+  expect(button('带我学习').disabled).toBe(false);
 });
 
 it('shows stale note warnings and opens the canonical note through the existing file navigation', async () => {
@@ -418,7 +423,9 @@ it('surfaces newly added lecture material separately from already covered notes'
   await act(async () => button('笔记').click());
   expect(host.textContent).toContain('尚未纳入笔记的资料 · 1 份');
   expect(host.textContent).toContain('第五章');
-  expect(host.querySelector('section[aria-label="课程笔记"]')!.textContent).not.toContain('第一讲');
+  expect(host.querySelector('section[aria-label="课程笔记"] details')!.textContent).not.toContain(
+    '第一讲',
+  );
   expect(host.textContent).not.toContain('来源有变化');
   const pending = host.querySelector(
     'section[aria-label="课程笔记"] details',
@@ -430,4 +437,195 @@ it('surfaces newly added lecture material separately from already covered notes'
   });
   await act(async () => button('第五章').click());
   expect(openDocument).toHaveBeenCalledWith('/semester/随机过程/课件/第五章.pdf', { keep: true });
+});
+
+const assignment: LearningSource = {
+  sourceId: 'assignment:433923',
+  title: 'EX3. 分组加密算法',
+  kind: 'assignment',
+  version: 'assignment-version-1',
+  revision: 'assignment-hash',
+  localPath: '/semester/随机过程/作业/EX3/Canvas作业说明.html',
+};
+
+const task: LearningTask = {
+  id: 'existing-ex3-task',
+  courseId: 1,
+  title: '已有 EX3 验收',
+  assignmentSourceId: assignment.sourceId,
+  assignmentSourceVersion: assignment.version,
+  dueAt: null,
+  status: 'checked',
+  requirements: [],
+  deliverables: [],
+  evidence: [],
+  findings: [],
+  checks: [],
+  updatedAt: '2026-10-29T00:00:00Z',
+  checkedAt: '2026-10-29T00:00:00Z',
+  warnings: [],
+};
+
+it('opens the assignment picker without starting a broad course task, then starts the exact original assignment', async () => {
+  const otherAssignment = { ...assignment, sourceId: 'assignment:other', title: 'EX4. 其他作业' };
+  const quiz = { ...assignment, sourceId: 'quiz:1:1', title: '期中测验', kind: 'quiz' };
+  getState.mockResolvedValue({
+    ...state,
+    courses: [{ ...courses[0]!, sources: [assignment, otherAssignment, quiz] }],
+  });
+  await act(async () => root.render(<LearningView />));
+  await act(async () => button('笔记').click());
+  await act(async () => button('完成作业').click());
+  expect(createSession).not.toHaveBeenCalled();
+  expect(host.querySelector('section[aria-label="选择作业"]')!.textContent).not.toContain(
+    '期中测验',
+  );
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('[aria-label="完成作业：EX3. 分组加密算法"]')!.click(),
+  );
+  expect(createSession).toHaveBeenCalledWith('project-one', 'library');
+  const input = ask.mock.calls[0]![1];
+  expect(input.text).toContain(assignment.sourceId);
+  expect(input.text).toContain(assignment.localPath);
+  expect(input.text).toContain(assignment.version);
+  expect(input.text).toContain('随机过程（Canvas course_id=1）');
+  expect(input.text).not.toContain(otherAssignment.sourceId);
+  expect(input.text).not.toContain('期中测验');
+  expect(input.text).toContain('不要提交到 Canvas');
+  expect(openChat).toHaveBeenCalledWith('session-one', 'project-one');
+});
+
+it('reuses an assignment record when checking the selected original assignment', async () => {
+  getState.mockResolvedValue({
+    ...state,
+    courses: [{ ...courses[0]!, sources: [assignment] }],
+    tasks: [task],
+  });
+  await act(async () => root.render(<LearningView />));
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>('[aria-label="检查答案：EX3. 分组加密算法"]')!.click(),
+  );
+  const input = ask.mock.calls[0]![1];
+  expect(input.text).toContain('已有答案');
+  expect(input.text).toContain(task.id);
+  expect(input.text).toContain(assignment.sourceId);
+  expect(input.text).toContain(assignment.version);
+  expect(createSession).toHaveBeenCalledTimes(1);
+});
+
+it('starts notes with exactly the selected materials and their source versions', async () => {
+  const second = {
+    ...courses[0]!.sources[0]!,
+    sourceId: 'source-two',
+    title: '第二讲',
+    version: 'v2',
+    localPath: '/semester/随机过程/课件/第二讲.pdf',
+  };
+  const unselected = { ...second, sourceId: 'source-three', title: '第三讲' };
+  getState.mockResolvedValue({
+    ...state,
+    courses: [
+      {
+        ...courses[0]!,
+        sources: [
+          ...courses[0]!.sources,
+          second,
+          unselected,
+          assignment,
+          { ...assignment, kind: 'quiz', sourceId: 'quiz:1:1', title: '随堂测验' },
+        ],
+      },
+    ],
+  });
+  await act(async () => root.render(<LearningView />));
+  await act(async () => button('整理笔记').click());
+  expect(createSession).not.toHaveBeenCalled();
+  expect(button('整理所选笔记').disabled).toBe(true);
+  const picker = host.querySelector('section[aria-label="选择笔记资料"]')!;
+  expect(picker.textContent).not.toContain(assignment.title);
+  expect(picker.textContent).not.toContain('随堂测验');
+  await act(async () =>
+    host.querySelector<HTMLInputElement>('[aria-label="选择资料：第一讲"]')!.click(),
+  );
+  await act(async () =>
+    host.querySelector<HTMLInputElement>('[aria-label="选择资料：第二讲"]')!.click(),
+  );
+  expect(host.textContent).toContain('已选 2 份资料');
+  await act(async () => button('整理所选笔记').click());
+  const input = ask.mock.calls[0]![1];
+  for (const source of [courses[0]!.sources[0]!, second]) {
+    expect(input.text).toContain(source.sourceId);
+    expect(input.text).toContain(source.localPath);
+    expect(input.text).toContain(source.version);
+  }
+  expect(input.text).not.toContain(unselected.sourceId);
+  expect(input.text).not.toContain(assignment.sourceId);
+  expect(input.text).toContain('随机过程（Canvas course_id=1）');
+});
+
+it('clears material selection when changing courses, including when switching back', async () => {
+  const secondCourse = {
+    ...courses[1]!,
+    sources: [
+      {
+        ...courses[0]!.sources[0]!,
+        sourceId: 'statistics-one',
+        title: '统计课件',
+        localPath: '/semester/数理统计/课件.pdf',
+      },
+    ],
+  };
+  getState.mockResolvedValue({ ...state, courses: [courses[0]!, secondCourse] });
+  await act(async () => root.render(<LearningView />));
+  await act(async () => button('整理笔记').click());
+  await act(async () =>
+    host.querySelector<HTMLInputElement>('[aria-label="选择资料：第一讲"]')!.click(),
+  );
+  expect(button('整理所选笔记').disabled).toBe(false);
+  await act(async () => {
+    const picker = host.querySelector('select')!;
+    picker.value = '2';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(host.textContent).toContain('已选 0 份资料');
+  expect(button('整理所选笔记').disabled).toBe(true);
+  expect(host.querySelector('section[aria-label="选择笔记资料"]')!.textContent).not.toContain(
+    '第一讲',
+  );
+  await act(async () => {
+    const picker = host.querySelector('select')!;
+    picker.value = '1';
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  expect(host.querySelector<HTMLInputElement>('[aria-label="选择资料：第一讲"]')!.checked).toBe(
+    false,
+  );
+  expect(ask).not.toHaveBeenCalled();
+});
+
+it('does not start two actions when assignment buttons are clicked in the same render', async () => {
+  let finishCreate!: (value: unknown) => void;
+  createSession.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishCreate = resolve;
+      }),
+  );
+  getState.mockResolvedValue({ ...state, courses: [{ ...courses[0]!, sources: [assignment] }] });
+  await act(async () => root.render(<LearningView />));
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>('[aria-label="完成作业：EX3. 分组加密算法"]')!.click();
+    host.querySelector<HTMLButtonElement>('[aria-label="检查答案：EX3. 分组加密算法"]')!.click();
+  });
+  expect(createSession).toHaveBeenCalledTimes(1);
+  expect(ask).not.toHaveBeenCalled();
+  await act(async () =>
+    finishCreate({
+      sessionId: 'session-one',
+      configured: true,
+      projectId: 'project-one',
+      messages: [],
+    }),
+  );
+  expect(ask).toHaveBeenCalledTimes(1);
 });

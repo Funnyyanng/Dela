@@ -379,7 +379,7 @@ export function Explorer({
       ref={root}
       role="tree"
       aria-label={label}
-      className="grid content-start gap-0 p-1"
+      className="grid grid-cols-1 content-start gap-0 p-1"
       style={
         virtualized
           ? {
