@@ -2,7 +2,7 @@ export interface WindowState {
   readonly maximized: boolean;
 }
 
-export type TrayAction = 'new-chat' | 'new-project' | 'open-settings';
+export type TrayAction = 'new-chat' | 'new-project' | 'open-settings' | 'open-jobs' | 'open-today';
 
 export interface WindowApi {
   minimize(): void;

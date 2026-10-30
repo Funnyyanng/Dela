@@ -8,6 +8,11 @@ export interface CanvasQuizSummary {
   updatedAt?: string | null;
 }
 
+export interface CanvasLocalSyncOptions {
+  courseId?: number;
+  assignmentIds?: number[];
+}
+
 export interface CanvasLocalSyncResult {
   root: string;
   projectId: string;
@@ -18,6 +23,7 @@ export interface CanvasLocalSyncResult {
   conflicts: { path: string; reason: string; incomingPath?: string }[];
   failed: string[];
   syncedAt: string;
+  scope?: { courseIds: number[]; assignmentIds?: number[]; completeLibrary: boolean };
 }
 
 export interface CanvasLocalSyncState {

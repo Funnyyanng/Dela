@@ -37,13 +37,31 @@ beforeEach(() => {
 it('条款记录与导出：主进程注册的通道名与界面发出的完全一致', async () => {
   registerConsentIpc();
   registerBackupIpc();
-  expect([...state.handles.keys()]).toEqual(['consent:record', 'backup:export']);
+  expect([...state.handles.keys()]).toEqual([
+    'consent:record',
+    'backup:export',
+    'backup:coverage',
+    'backup:inspect',
+    'backup:restore',
+    'backup:activate',
+    'backup:return-to-previous',
+  ]);
 
   await consent.record('terms', '2026-10-15');
   expect(state.invoke).toHaveBeenLastCalledWith('consent:record', 'terms', '2026-10-15');
 
   await backup.exportData();
   expect(state.invoke).toHaveBeenLastCalledWith('backup:export');
+  await backup.getCoverage();
+  expect(state.invoke).toHaveBeenLastCalledWith('backup:coverage');
+  await backup.inspect();
+  expect(state.invoke).toHaveBeenLastCalledWith('backup:inspect');
+  await backup.restore('/backup', 'hash');
+  expect(state.invoke).toHaveBeenLastCalledWith('backup:restore', '/backup', 'hash');
+  await backup.activate('/restored');
+  expect(state.invoke).toHaveBeenLastCalledWith('backup:activate', '/restored');
+  await backup.returnToPrevious();
+  expect(state.invoke).toHaveBeenLastCalledWith('backup:return-to-previous');
 });
 
 it('导出通道只认应用主框架，别的来源一律拒绝', () => {

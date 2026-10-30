@@ -8,6 +8,9 @@ import { shuiyuanTools } from './domain/shuiyuan';
 import { timetableTools } from './domain/timetable';
 import { todoTools } from './domain/todo';
 import { learningTools } from './domain/learning';
+import { jobsTools } from './domain/jobs';
+import { projectTools } from './domain/projects';
+import { lifeTools } from './domain/life';
 import { workspaceTools } from './domain/workspace';
 import { readResourceTool } from './domain/read-resource';
 import { prepareDocumentResource, releaseDocumentResource } from '../resources';
@@ -18,6 +21,13 @@ import { assertShuiyuanEnabled, experimentEnabled } from '../settings/prefs';
 
 // 这些是 shell 的业务命令，不常驻模型工具表；复用应用已有的缓存、登录与操作边界。
 const commandDomains = [
+  { name: 'life', description: '查询习惯与作息，记录用户提供的实际情况', commands: lifeTools },
+  { name: 'jobs', description: '查询处理队列与报告当前任务进度', commands: jobsTools },
+  {
+    name: 'projects',
+    description: '查询项目目标、任务和成果，保存明确的项目约定',
+    commands: projectTools,
+  },
   { name: 'canvas', description: '查询、同步 Canvas 课程与资料', commands: canvasTools },
   { name: 'classroom', description: '读取与下载课堂视频语音文稿', commands: classroomTools },
   { name: 'mail', description: '检索邮件、读取附件与准备邮件草稿', commands: mailTools },

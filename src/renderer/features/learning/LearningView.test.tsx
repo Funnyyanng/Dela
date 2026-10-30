@@ -89,6 +89,7 @@ const state: LearningState = {
 let root: Root;
 let host: HTMLDivElement;
 const createSession = vi.fn();
+const enqueue = vi.fn();
 const ask = vi.fn();
 const submit = vi.fn();
 const getState = vi.fn();
@@ -98,6 +99,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.clearAllMocks();
+  enqueue.mockResolvedValue({ id: 'accepted-job' });
   createSession.mockResolvedValue({
     sessionId: 'session-one',
     configured: true,
@@ -114,6 +116,11 @@ beforeEach(() => {
   submit.mockResolvedValue({ ...state, practice: [] });
   window.dela = {
     learning: { getState, submitPracticeAttempt: submit },
+    jobs: {
+      enqueue,
+      getState: async () => ({ jobs: useLearningJobs.getState().jobs }),
+      onUpdate: () => () => {},
+    },
     session: { create: createSession, ask, onRunEvent: () => () => {} },
   } as unknown as typeof window.dela;
   host = document.createElement('div');
@@ -126,6 +133,15 @@ it.each(['completed', 'failed', 'stopped'] as const)(
   async (status) => {
     useLearningJobs.getState().add({
       id: 'background-job',
+      domain: 'learning',
+      stage: '正在处理',
+      question: null,
+      usage: null,
+      sourceVersions: [],
+      createdAt: 1,
+      updatedAt: 1,
+      order: 1,
+      awaitingResume: false,
       projectId: 'project-one',
       courseId: 1,
       courseName: '随机过程',
@@ -394,14 +410,16 @@ it('starts only the selected course workflow after an explicit action', async ()
   });
   expect(createSession).not.toHaveBeenCalled();
   await act(async () => button('带我学习').click());
-  expect(createSession).toHaveBeenCalledWith('project-two', 'library');
   expect(openChat).not.toHaveBeenCalled();
-  const input = ask.mock.calls[0]![1];
-  expect(input.text).toContain('/skill:learning-workflow');
-  expect(input.text).toContain('数理统计（Canvas course_id=2）');
-  expect(input.text).toContain('/semester/数理统计');
-  expect(input.text).not.toContain('随机过程');
-  expect(input.attachments).toEqual([]);
+  expect(enqueue).toHaveBeenCalledWith(
+    expect.objectContaining({
+      domain: 'learning',
+      projectId: 'project-two',
+      courseId: 2,
+      action: 'study',
+      title: '数理统计',
+    }),
+  );
 });
 
 it('remembers the last course without starting a workflow automatically', async () => {
@@ -413,7 +431,7 @@ it('remembers the last course without starting a workflow automatically', async 
 });
 
 it('shows a readable failure without sending when course chat creation fails', async () => {
-  createSession.mockRejectedValue(new Error('项目目录不存在'));
+  enqueue.mockRejectedValueOnce(new Error('项目目录不存在'));
   await act(async () => root.render(<LearningView />));
   await act(async () => button('带我学习').click());
   expect(ask).not.toHaveBeenCalled();
@@ -561,15 +579,14 @@ it('starts notes with exactly the selected materials and their source versions',
   );
   expect(host.textContent).toContain('已选 2 份资料');
   await act(async () => button('整理所选笔记').click());
-  const input = ask.mock.calls[0]![1];
-  for (const source of [courses[0]!.sources[0]!, second]) {
-    expect(input.text).toContain(source.sourceId);
-    expect(input.text).toContain(source.localPath);
-    expect(input.text).toContain(source.version);
-  }
-  expect(input.text).not.toContain(unselected.sourceId);
-  expect(input.text).not.toContain(assignment.sourceId);
-  expect(input.text).toContain('随机过程（Canvas course_id=1）');
+  const input = enqueue.mock.calls[0]![0];
+  expect(input).toMatchObject({
+    courseId: 1,
+    action: 'notes',
+    sourceIds: ['source-one', second.sourceId],
+  });
+  expect(input.sourceIds).not.toContain(unselected.sourceId);
+  expect(input.sourceIds).not.toContain(assignment.sourceId);
 });
 
 it('clears material selection when changing courses, including when switching back', async () => {

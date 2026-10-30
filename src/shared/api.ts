@@ -7,8 +7,12 @@ import type { CanvasApi } from './canvas';
 import type { ChatApi } from './chat';
 import type { PackageApi } from './packages';
 import type { ConsentApi } from './consent';
+import type { ContextApi } from './context';
 import type { LayoutApi } from './layout';
 import type { LearningApi } from './learning';
+import type { JobsApi } from './jobs';
+import type { LifeApi } from './life';
+import type { ProjectsApi } from './projects';
 import type { LlmApi } from './llm';
 import type { MailApi } from './mail';
 import type { NotificationsApi } from './notifications';
@@ -52,6 +56,7 @@ export interface DelaApi {
   readonly settings: SettingsApi;
   /** 条款接受记录与导出本机数据只在引导的条款接受页使用（见 docs/DEVELOPMENT.md）。 */
   readonly consent: ConsentApi;
+  readonly context: ContextApi;
   readonly backup: BackupApi;
   /** 设置 › 通用 底部的缓存占用与清理。 */
   readonly cache: CacheApi;
@@ -66,6 +71,9 @@ export interface DelaApi {
   readonly remotes: RemoteApi;
   readonly layout: LayoutApi;
   readonly learning: LearningApi;
+  readonly jobs: JobsApi;
+  readonly life: LifeApi;
+  readonly projects: ProjectsApi;
   readonly search: SearchApi;
   readonly notifications: NotificationsApi;
   readonly update: UpdateApi;

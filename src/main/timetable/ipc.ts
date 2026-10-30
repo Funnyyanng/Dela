@@ -1,5 +1,7 @@
 import {
   setSemesterStart,
+  querySchedule,
+  updateCalendarEvent,
   getTimetableState,
   resolveSemester,
   openLoginWindow,
@@ -15,6 +17,14 @@ import { checkWorkspaceSender } from '../ipc';
 import { type TimetableResult } from '../../shared/api';
 
 export function registerTimetableIpc(): void {
+  ipcMain.handle('timetable:query-schedule', (event, input: unknown) => {
+    checkWorkspaceSender(event);
+    return querySchedule(input);
+  });
+  ipcMain.handle('timetable:update-event', (event, id: unknown, input: unknown) => {
+    checkWorkspaceSender(event);
+    return updateCalendarEvent(id, input);
+  });
   ipcMain.handle('timetable:get-state', async (_event, requested?: unknown) =>
     getTimetableState(requested),
   );

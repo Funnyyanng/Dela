@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { copyFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import type { CanvasLocalSyncResult, CanvasLocalSyncState } from '../../shared/canvas-local';
+import type {
+  CanvasLocalSyncOptions,
+  CanvasLocalSyncResult,
+  CanvasLocalSyncState,
+} from '../../shared/canvas-local';
 import { getDatabase } from '../database';
 import { availablePath, diskName } from '../storage';
 import { linkProjectFolder } from '../workspace/api';
@@ -13,6 +17,7 @@ import {
   getCanvasQuizzes,
   getCanvasState,
   getSource,
+  syncCanvasAssignment,
   syncCanvasCourse,
   syncCanvasCourses,
   type StoredSource,
@@ -41,6 +46,13 @@ const resultSchema = z.object({
   ),
   failed: z.array(z.string()),
   syncedAt: z.string(),
+  scope: z
+    .object({
+      courseIds: z.array(z.number()),
+      assignmentIds: z.array(z.number()).optional(),
+      completeLibrary: z.boolean(),
+    })
+    .optional(),
 });
 const stateSchema = z.object({
   root: z.string(),
@@ -186,18 +198,40 @@ interface Material {
   candidates?: string[];
 }
 
-let activeSync: Promise<CanvasLocalSyncResult> | null = null;
-export function syncLocalCanvas(): Promise<CanvasLocalSyncResult> {
-  if (activeSync) return activeSync;
-  activeSync = syncLocalCanvasFiles().finally(() => {
-    activeSync = null;
+export const localSyncOptionsSchema = z
+  .object({
+    courseId: z.number().int().positive().optional(),
+    assignmentIds: z.array(z.number().int().positive()).min(1).max(100).optional(),
+  })
+  .strict()
+  .refine((value) => !value.assignmentIds || value.courseId, {
+    message: '同步具体作业时必须指定课程',
   });
-  return activeSync;
+let syncQueue: Promise<unknown> = Promise.resolve();
+const pendingSyncs = new Map<string, Promise<CanvasLocalSyncResult>>();
+export function syncLocalCanvas(raw: CanvasLocalSyncOptions = {}): Promise<CanvasLocalSyncResult> {
+  const options = localSyncOptionsSchema.parse(raw);
+  if (options.assignmentIds)
+    options.assignmentIds = [...new Set(options.assignmentIds)].sort((a, b) => a - b);
+  const key = JSON.stringify(options);
+  const pending = pendingSyncs.get(key);
+  if (pending) return pending;
+  const work = syncQueue.then(() => syncLocalCanvasFiles(options));
+  const result = work.finally(() => pendingSyncs.delete(key));
+  pendingSyncs.set(key, result);
+  syncQueue = result.catch(() => {});
+  return result;
 }
 
-async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
+async function syncLocalCanvasFiles(
+  options: CanvasLocalSyncOptions,
+): Promise<CanvasLocalSyncResult> {
   const state = getLocalCanvasSyncState();
   if (!state) throw new Error('请先关联本地课程文件夹');
+  const courses = options.courseId
+    ? state.courses.filter((course) => course.id === options.courseId)
+    : state.courses;
+  if (!courses.length) throw new Error('这门课程尚未关联本地文件夹');
   const result: CanvasLocalSyncResult = {
     root: state.root,
     projectId: state.projectId,
@@ -208,11 +242,21 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
     conflicts: [],
     failed: [],
     syncedAt: new Date().toISOString(),
+    scope: {
+      courseIds: courses.map((course) => course.id),
+      assignmentIds: options.assignmentIds,
+      completeLibrary: !options.courseId,
+    },
   };
   const bindings = readLocalCanvasBindings(state.root);
   const finish = () => {
     saveLocalCanvasBindings(state.root, bindings);
-    saveState({ ...state, syncedAt: result.syncedAt, lastResult: result });
+    saveState({
+      ...state,
+      syncedAt:
+        result.scope?.completeLibrary && !result.failed.length ? result.syncedAt : state.syncedAt,
+      lastResult: result,
+    });
     return result;
   };
   const apply = async (material: Material) => {
@@ -346,10 +390,11 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
     const legacy = existsSync(legacyPath)
       ? legacySchema.parse(JSON.parse(readFileSync(legacyPath, 'utf8')))
       : [];
-    await syncCanvasCourses();
+    if (!options.courseId) await syncCanvasCourses();
     const testGroups: { course: string; tests: TestSnapshot; warning: string }[] = [];
-    for (const course of state.courses) {
+    for (const course of courses) {
       const tests: TestSnapshot = [];
+      const refreshedAssignments = new Set<number>();
       let testsVerified = false;
       let testsFailed = false;
       await safely(course.name, async () => {
@@ -357,102 +402,114 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
           mkdirSync(localCanvasPath(state.root, join(course.directory, category)), {
             recursive: true,
           });
-        await syncCanvasCourse(course.id);
+        if (options.assignmentIds) {
+          for (const id of options.assignmentIds)
+            await safely(`${course.name}/作业 ${id}`, async () => {
+              await syncCanvasAssignment(course.id, id);
+              refreshedAssignments.add(id);
+            });
+        } else await syncCanvasCourse(course.id);
         const canvas = getCanvasState();
         const synced = canvas.courses.find((item) => item.id === course.id);
-        if (synced?.error) result.failed.push(`${course.name}：${synced.error}`);
-        if (synced?.error?.includes('作业：')) testsFailed = true;
-        const manifestPath = join(state.root, `.canvas-${course.id}-files.json`);
-        const manifest = existsSync(manifestPath)
-          ? manifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')))
-          : [];
-        const candidatePath = (path: string) => {
-          const absolute = localCanvasPath(state.root, path);
-          const insideCourse = relative(localCanvasPath(state.root, course.directory), absolute);
-          if (
-            !insideCourse ||
-            insideCourse === '..' ||
-            insideCourse.startsWith(`..${sep}`) ||
-            isAbsolute(insideCourse) ||
-            insideCourse.split(sep).includes('学习笔记')
-          )
-            throw new Error('历史资料路径必须属于对应课程且不能位于学习笔记');
-          return relative(state.root, absolute);
-        };
-        const lectureFiles = new Map<string, string[]>();
-        const pending = [localCanvasPath(state.root, join(course.directory, '课件'))];
-        while (pending.length) {
-          for (const item of readdirSync(pending.pop()!, { withFileTypes: true })) {
-            if (item.isSymbolicLink() || item.name === '学习笔记') continue;
-            const path = join(item.parentPath, item.name);
-            if (item.isDirectory()) pending.push(path);
-            else if (item.isFile()) {
-              const paths = lectureFiles.get(item.name) ?? [];
-              paths.push(path);
-              lectureFiles.set(item.name, paths);
+        if (!options.assignmentIds && synced?.error)
+          result.failed.push(`${course.name}：${synced.error}`);
+        if (!options.assignmentIds && synced?.error?.includes('作业：')) testsFailed = true;
+        if (!options.assignmentIds) {
+          const manifestPath = join(state.root, `.canvas-${course.id}-files.json`);
+          const manifest = existsSync(manifestPath)
+            ? manifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')))
+            : [];
+          const candidatePath = (path: string) => {
+            const absolute = localCanvasPath(state.root, path);
+            const insideCourse = relative(localCanvasPath(state.root, course.directory), absolute);
+            if (
+              !insideCourse ||
+              insideCourse === '..' ||
+              insideCourse.startsWith(`..${sep}`) ||
+              isAbsolute(insideCourse) ||
+              insideCourse.split(sep).includes('学习笔记')
+            )
+              throw new Error('历史资料路径必须属于对应课程且不能位于学习笔记');
+            return relative(state.root, absolute);
+          };
+          const lectureFiles = new Map<string, string[]>();
+          const pending = [localCanvasPath(state.root, join(course.directory, '课件'))];
+          while (pending.length) {
+            for (const item of readdirSync(pending.pop()!, { withFileTypes: true })) {
+              if (item.isSymbolicLink() || item.name === '学习笔记') continue;
+              const path = join(item.parentPath, item.name);
+              if (item.isDirectory()) pending.push(path);
+              else if (item.isFile()) {
+                const paths = lectureFiles.get(item.name) ?? [];
+                paths.push(path);
+                lectureFiles.set(item.name, paths);
+              }
             }
           }
-        }
-        for (const entry of collectCourseFileEntries(course.id, canvas.items)) {
-          await safely(`${course.name}/${entry.name}`, async () => {
-            const source = getSource(entry.sourceId);
-            if (!source.updatedAt)
-              throw new Error('Canvas 未提供文件更新时间，无法证明二进制版本，未更新本地文件');
-            const matches = legacy.filter(
-              (item) =>
-                Number(item.course_id) === course.id &&
-                (String(item.canvas_file_id ?? item.file_id ?? '') === String(source.fileId) ||
-                  item.name === entry.name),
-            );
-            const manifestMatches = manifest.filter(
-              (item) =>
-                item.local_path &&
-                (item.name === entry.name ||
-                  (item.url &&
-                    new URL(item.url, 'https://oc.sjtu.edu.cn').pathname.match(
-                      /\/files\/(\d+)/,
-                    )?.[1] === String(source.fileId))),
-            );
-            const candidates = [
-              ...new Set(
-                [
-                  ...manifestMatches.map((item) => item.local_path!),
-                  ...matches.map((item) => item.path),
-                ].map(candidatePath),
-              ),
-            ];
-            for (const path of lectureFiles.get(diskName(entry.name)) ?? [])
-              if (source.size === undefined || statSync(path).size === source.size)
-                candidates.push(relative(state.root, path));
-            const legacyFile = candidates.find((path) =>
-              statSync(localCanvasPath(state.root, path), { throwIfNoEntry: false })?.isFile(),
-            );
-            const folders = entry.folders
-              .filter((folder) => folder !== '资料' && folder !== '课件')
-              .map(diskName);
-            await apply({
-              key: source.id,
-              sourceId: source.id,
-              version: source.updatedAt,
-              path: legacyFile ?? join(course.directory, '课件', ...folders, diskName(entry.name)),
-              scanRoot: join(course.directory, '课件'),
-              mime: source.mime ?? 'application/octet-stream',
-              source,
-              candidates,
+          for (const entry of collectCourseFileEntries(course.id, canvas.items)) {
+            await safely(`${course.name}/${entry.name}`, async () => {
+              const source = getSource(entry.sourceId);
+              if (!source.updatedAt)
+                throw new Error('Canvas 未提供文件更新时间，无法证明二进制版本，未更新本地文件');
+              const matches = legacy.filter(
+                (item) =>
+                  Number(item.course_id) === course.id &&
+                  (String(item.canvas_file_id ?? item.file_id ?? '') === String(source.fileId) ||
+                    item.name === entry.name),
+              );
+              const manifestMatches = manifest.filter(
+                (item) =>
+                  item.local_path &&
+                  (item.name === entry.name ||
+                    (item.url &&
+                      new URL(item.url, 'https://oc.sjtu.edu.cn').pathname.match(
+                        /\/files\/(\d+)/,
+                      )?.[1] === String(source.fileId))),
+              );
+              const candidates = [
+                ...new Set(
+                  [
+                    ...manifestMatches.map((item) => item.local_path!),
+                    ...matches.map((item) => item.path),
+                  ].map(candidatePath),
+                ),
+              ];
+              for (const path of lectureFiles.get(diskName(entry.name)) ?? [])
+                if (source.size === undefined || statSync(path).size === source.size)
+                  candidates.push(relative(state.root, path));
+              const legacyFile = candidates.find((path) =>
+                statSync(localCanvasPath(state.root, path), { throwIfNoEntry: false })?.isFile(),
+              );
+              const folders = entry.folders
+                .filter((folder) => folder !== '资料' && folder !== '课件')
+                .map(diskName);
+              await apply({
+                key: source.id,
+                sourceId: source.id,
+                version: source.updatedAt,
+                path:
+                  legacyFile ?? join(course.directory, '课件', ...folders, diskName(entry.name)),
+                scanRoot: join(course.directory, '课件'),
+                mime: source.mime ?? 'application/octet-stream',
+                source,
+                candidates,
+              });
             });
-          });
+          }
         }
-        const quizzes = await getCanvasQuizzes(course.id)
-          .then((items) => {
-            testsVerified = true;
-            return items;
-          })
-          .catch((error: unknown) => {
-            result.failed.push(
-              `${course.name}/测试：${error instanceof Error ? error.message : String(error)}`,
-            );
-            return [];
-          });
+        const quizzes = options.assignmentIds
+          ? []
+          : await getCanvasQuizzes(course.id)
+              .then((items) => {
+                testsVerified = true;
+                return items;
+              })
+              .catch((error: unknown) => {
+                result.failed.push(
+                  `${course.name}/测试：${error instanceof Error ? error.message : String(error)}`,
+                );
+                return [];
+              });
         const quizAssignments = new Set(
           quizzes.map((quiz) => quiz.assignmentId).filter((id) => id !== undefined),
         );
@@ -526,7 +583,12 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
         const assignments = new Map(
           canvas.items
             .filter(
-              (item) => item.courseId === course.id && item.kind === 'assignment' && item.sourceId,
+              (item) =>
+                item.courseId === course.id &&
+                item.kind === 'assignment' &&
+                item.sourceId &&
+                (!options.assignmentIds ||
+                  refreshedAssignments.has(Number(item.sourceId.split(':').at(-1)))),
             )
             .map((item) => [item.sourceId!, item.name]),
         );
@@ -543,7 +605,7 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
                 source.dueAt,
                 source.url ?? '',
                 source.updatedAt,
-                false,
+                Boolean(source.quizId),
               );
             } catch (error) {
               if (taskInfo(title, false).category === '测试') testsFailed = true;
@@ -568,6 +630,7 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
             }
           });
       });
+      if (options.assignmentIds) continue;
       const snapshotKey = `canvas-local-tests:${state.root}:${course.id}`;
       if (testsVerified && !testsFailed) {
         getDatabase()
@@ -587,6 +650,7 @@ async function syncLocalCanvasFiles(): Promise<CanvasLocalSyncResult> {
         });
       }
     }
+    if (options.courseId) return finish();
     const bytes = Buffer.from(
       `# Canvas 测试总览\n\n${testGroups.map((group) => `${group.warning ? `> ${group.course}：${group.warning}\n\n` : ''}${group.tests.map((test) => `- ${group.course} / ${test.title}\n  - DDL：${readableDueAt(test.dueAt)}\n  - 内容：[测试说明](<${test.path.split(sep).join('/')}>)\n  - Canvas：${test.url}`).join('\n')}`).join('\n')}\n`,
     );

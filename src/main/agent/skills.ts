@@ -47,6 +47,9 @@ export function completeCapabilitySetup(): void {
 
 /** 全局 Skill 根目录：~/.dela/skills（内置 Skill 随应用写入；用户自己的 Skill 也放这里）。 */
 export function builtinSkillsDirectory(): string {
+  const restored = join(app.getPath('userData'), 'restored-skills');
+  if (existsSync(join(app.getPath('userData'), 'restore-info.json')) && existsSync(restored))
+    return restored;
   return join(app.getPath('home'), '.dela', 'skills');
 }
 

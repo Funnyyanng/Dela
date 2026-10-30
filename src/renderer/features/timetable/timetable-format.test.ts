@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   blockHeights,
+  localEventsByDay,
+  formatEventRange,
   eventDayEdges,
   eventStyle,
   layoutDayColumns,
@@ -118,4 +120,20 @@ describe('eventStyle', () => {
     expect(minutesToRem(55)).toBe(blockHeights.twoRows);
     expect(minutesToRem(75)).toBe(blockHeights.threeRows);
   });
+});
+
+it('keeps a midnight deadline on its actual day without inventing a time interval', () => {
+  const date = new Date(2026, 9, 30, 0, 0, 0);
+  const deadline = {
+    id: 'deadline',
+    title: '作业截止',
+    startAt: date.toISOString(),
+    endAt: date.toISOString(),
+    location: null,
+    color: null,
+    deadline: true,
+  };
+  expect([...localEventsByDay([deadline]).values()]).toEqual([[deadline]]);
+  expect(formatEventRange(deadline)).toContain('截止');
+  expect(formatEventRange(deadline)).not.toContain(' – ');
 });

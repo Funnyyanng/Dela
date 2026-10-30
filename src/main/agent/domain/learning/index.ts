@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { realpathSync } from 'node:fs';
+import { workspacePathAffected } from '../../../../shared/workspace';
+import { exportSavedMarkdownPdf } from '../../../documents/markdown-pdf';
 import {
   getLearningCourses,
   getLearningOverview,
@@ -23,6 +26,18 @@ import { noteRevisionTools } from './note-revisions';
 const courseId = z.number().int().positive();
 
 export const learningTools = {
+  export_learning_pdf: tool(
+    '将课程中已保存的 Markdown 原稿导出为同目录的 A4 PDF，无需保存弹窗。保留公式和图表，不覆盖已有 PDF；需修订时指定新的 outputName。导出成功后仍须检查实际渲染页，不能把导出当成排版复核。',
+    z
+      .object({ courseId, path: z.string().min(1), outputName: z.string().min(1).optional() })
+      .strict(),
+    async ({ courseId, path, outputName }) => {
+      const course = getLearningCourses().find((item) => item.id === courseId);
+      if (!course || !workspacePathAffected(realpathSync(path), realpathSync(course.directory)))
+        throw new Error('请选择本课程目录中的原稿');
+      return { path: await exportSavedMarkdownPdf(path, outputName), layoutChecked: false };
+    },
+  ),
   get_learning_state: tool(
     '读取本地课程学习概况、课程目录和中间审阅工作目录。只返回记录数和告警；详细资料与学习记录分别用 query_learning_sources/query_learning_records 分页查询。已核对状态表示成果通过已登记要求的检查，不代表提交或掌握。',
     z.object({ courseId: courseId.optional() }).strict(),

@@ -2,8 +2,6 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { WorkspaceChat } from '../../../shared/session';
-import { useSessions } from '../../sessions/store';
 import { LearningJobProgress } from './LearningJobProgress';
 import { useLearningJobs, type LearningJob } from './learning-jobs';
 
@@ -21,6 +19,15 @@ vi.mock('../../content/chat/markdown', () => ({
 
 const job: LearningJob = {
   id: 'job',
+  domain: 'learning',
+  stage: '等待处理',
+  question: null,
+  usage: null,
+  sourceVersions: [],
+  createdAt: 1,
+  updatedAt: 1,
+  order: 1,
+  awaitingResume: false,
   projectId: 'semester',
   courseId: 7,
   courseName: '密码学',
@@ -40,7 +47,16 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.clearAllMocks();
   useLearningJobs.setState({ jobs: [job] });
-  useSessions.setState({ chats: {} });
+  window.dela = {
+    jobs: {
+      getState: async () => ({ jobs: useLearningJobs.getState().jobs }),
+      onUpdate: () => () => {},
+      cancel: async (id: string) => {
+        useLearningJobs.getState().update(id, { status: 'stopped' });
+        return { jobs: useLearningJobs.getState().jobs };
+      },
+    },
+  } as unknown as typeof window.dela;
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -56,10 +72,9 @@ it('shows queue, live progress and registered results in place without opening c
   expect(container.textContent).toContain('等待处理');
   await act(async () => {
     useLearningJobs.getState().update('job', { status: 'running', sessionId: 'session' });
-    useSessions.getState().putChat('session', {
-      messages: [{ role: 'assistant', content: '正在核对第四题' }],
-      activeTool: 'read_resource',
-    } as WorkspaceChat);
+    useLearningJobs
+      .getState()
+      .update('job', { result: '正在核对第四题', stage: '正在读取或核验资料' });
   });
   expect(container.textContent).toContain('正在核对第四题');
   expect(container.textContent).toContain('正在读取或核验资料');
@@ -99,4 +114,17 @@ it('preserves job status across view remount and can cancel queued work', async 
   );
   expect(useLearningJobs.getState().jobs[0]!.status).toBe('stopped');
   expect(container.textContent).toContain('已停止');
+});
+
+it('shows project jobs in the project page without mixing course tasks', async () => {
+  useLearningJobs.setState({
+    jobs: [
+      job,
+      { ...job, id: 'project-job', domain: 'project', courseId: undefined, title: '项目验收' },
+    ],
+  });
+  await act(async () => root.render(<LearningJobProgress domain="project" projectId="semester" />));
+  expect(container.querySelector('[aria-label="项目任务进度"]')).not.toBeNull();
+  expect(container.textContent).toContain('项目验收');
+  expect(container.textContent).not.toContain('EX4');
 });

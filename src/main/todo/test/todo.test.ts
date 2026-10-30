@@ -223,3 +223,66 @@ describe('TODO 持久化与同步', () => {
     expect(listTodoCanvasAssignments).toHaveBeenCalledTimes(1);
   });
 });
+
+it('精准核对当前课程，保留其他课程待办和失败状态，不伪造全量成功', async () => {
+  vi.mocked(listTodoCanvasCourses).mockResolvedValue([
+    { id: 1, name: '课程一', code: 'A' },
+    { id: 2, name: '课程二', code: 'B' },
+  ]);
+  vi.mocked(listTodoCanvasAssignments).mockImplementation(async (id) => [assignment(id)]);
+  await refreshTodos();
+  const before = getTodoState();
+  vi.mocked(listTodoCanvasAssignments).mockImplementation(async (id) => {
+    if (id === 2) throw new Error('课程二离线');
+    return [assignment(1)];
+  });
+  await refreshTodos({ courseId: 2 });
+  vi.clearAllMocks();
+  vi.mocked(listTodoCanvasAssignments).mockResolvedValue([
+    assignment(1, { workflow_state: 'submitted' }),
+  ]);
+  const next = await refreshTodos({ courseId: 1 });
+  expect(listTodoCanvasAssignments).toHaveBeenCalledExactlyOnceWith(1);
+  expect(listTodoCanvasCourses).not.toHaveBeenCalled();
+  expect(next.items.find((item) => item.courseId === 1)?.status).toBe('submitted');
+  expect(next.items.find((item) => item.courseId === 2)).toEqual(
+    before.items.find((item) => item.courseId === 2),
+  );
+  expect(next.syncedAt).toBe(before.syncedAt);
+  expect(next.canvasCourses?.find((course) => course.id === 2)?.error).toBe('课程二离线');
+  expect(next.error).toContain('课程二离线');
+});
+
+it('keeps due and reminder separate, persists project references, and protects recurring masters', () => {
+  const state = saveTodo({
+    title: '项目资料检查',
+    area: 'project',
+    projectId: 'research-project',
+    priority: 'high',
+    estimateMinutes: 25,
+    dueAt: '2026-10-31T13:00:00Z',
+    remindAt: '2026-10-30T13:00:00Z',
+  });
+  const item = state.items.find((item) => item.source === 'personal')!;
+  expect(item).toMatchObject({
+    area: 'project',
+    projectId: 'research-project',
+    estimateMinutes: 25,
+  });
+  saveTodo({
+    id: item.id,
+    title: item.title,
+    recurrence: { frequency: 'weekly', startDate: '2026-10-30', weekdays: [5] },
+  });
+  expect(() => saveTodo({ id: item.id, title: item.title, completed: true })).toThrow('具体日期');
+  expect(getTodoState().items[0]).toMatchObject({
+    status: 'pending',
+    dueAt: '2026-10-31T13:00:00Z',
+    remindAt: '2026-10-30T13:00:00Z',
+  });
+  expect(() =>
+    saveTodo({ title: '错误日期', recurrence: { frequency: 'daily', startDate: '2026-02-30' } }),
+  ).toThrow('日期无效');
+  saveTodo({ id: item.id, title: item.title, recurrence: null, completed: true });
+  expect(getTodoState().items[0]?.status).toBe('completed');
+});

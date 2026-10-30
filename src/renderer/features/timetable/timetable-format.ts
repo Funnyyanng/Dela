@@ -104,10 +104,13 @@ export function formatMinuteOfDay(minute: number): string {
 }
 
 // 事件的完整起止时间：同日只写一个日期，跨日两端各带日期与星期。
-export function formatEventRange(event: Pick<CalendarEvent, 'startAt' | 'endAt'>): string {
+export function formatEventRange(
+  event: Pick<CalendarEvent, 'startAt' | 'endAt' | 'deadline'>,
+): string {
   const start = new Date(event.startAt);
   const end = new Date(event.endAt);
   const startText = `${formatMonthDay(start)}（${weekdayName(start)}）${formatTime(start)}`;
+  if (event.deadline || start.getTime() === end.getTime()) return `截止 ${startText}`;
   return dateKey(start) === dateKey(end)
     ? `${startText} – ${formatTime(end)}`
     : `${startText} – ${formatMonthDay(end)}（${weekdayName(end)}）${formatTime(end)}`;
@@ -245,7 +248,10 @@ export function localEventsByDay(events: readonly CalendarEvent[]): Map<string, 
     const start = startOfDay(new Date(event.startAt));
     const end = new Date(event.endAt);
     // 结束时刻恰为午夜时归属前一天，避免跨天任务多占一天。
-    const last = startOfDay(new Date(end.getTime() - (end.getHours() || end.getMinutes() ? 0 : 1)));
+    const last =
+      event.deadline || event.startAt === event.endAt
+        ? start
+        : startOfDay(new Date(end.getTime() - (end.getHours() || end.getMinutes() ? 0 : 1)));
     for (let day = start; day.getTime() <= last.getTime(); day = addDays(day, 1)) {
       const key = dateKey(day);
       const current = grouped.get(key);

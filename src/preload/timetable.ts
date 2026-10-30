@@ -1,7 +1,12 @@
 import type { CalendarEventInput, TimetableApi } from '../shared/api';
-import { invoke } from './lib';
+import { invoke, on } from './lib';
 
 export const timetable = {
+  onUpdate: (listener: () => void) => on('timetable:updated', listener),
+  querySchedule: (input: { startAt: string; endAt: string; semester?: string }) =>
+    invoke('timetable:query-schedule', input),
+  updateEvent: (id: number, input: CalendarEventInput) =>
+    invoke('timetable:update-event', id, input),
   getState: (semester?: string) => invoke('timetable:get-state', semester),
   connect: () => invoke('timetable:connect'),
   disconnect: () => invoke('timetable:disconnect'),

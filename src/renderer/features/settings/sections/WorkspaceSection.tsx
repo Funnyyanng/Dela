@@ -7,6 +7,8 @@ import { SettingRow } from '../SettingRow';
 import { SettingsGroup } from '../SettingsGroup';
 import { errorText, useWorkspaceStore } from '../../../workspace/store';
 import { showToast } from '../../../app/toasts';
+import { ContextSettings } from './ContextSettings';
+import { BackupSettings } from './BackupSettings';
 
 /** 重置后的默认布局：单组空标签（workbench 的 createDefaultLayout 同构）。 */
 const defaultLayout: WorkbenchLayout = {
@@ -98,6 +100,8 @@ export function WorkspaceSection() {
           </div>
         </SettingRow>
       </SettingsGroup>
+      <ContextSettings />
+      <BackupSettings />
     </div>
   );
 }

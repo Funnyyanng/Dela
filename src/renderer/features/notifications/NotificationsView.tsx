@@ -39,6 +39,8 @@ const filterLabels: Record<NotificationFilter, string> = {
   mail: '邮件',
   shuiyuan: '水源',
   todo: 'TODO',
+  jobs: '处理任务',
+  life: '日程与生活',
 };
 
 function formatTime(value: string): string {
@@ -66,7 +68,7 @@ function snoozeUntil(kind: '30m' | '1h' | 'tomorrow'): string {
 }
 
 function SourceIcon({ source }: { source: NotificationItem['source'] }) {
-  const Icon = source === 'mail' ? Mail : source === 'todo' ? CircleCheckBig : ShuiyuanIcon;
+  const Icon = source === 'mail' ? Mail : source === 'shuiyuan' ? ShuiyuanIcon : CircleCheckBig;
   return <Icon aria-hidden="true" className="mt-0.5 size-5 shrink-0 text-ink-3" />;
 }
 

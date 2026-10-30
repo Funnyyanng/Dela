@@ -861,3 +861,18 @@ describe('导入已有文件夹作为项目', () => {
     expect(() => linkProjectFolder(workspaceRoot())).toThrow('工作区目录');
   });
 });
+
+it('bounds global file lookup without including all ancestors in the limit or starting Git per result', async () => {
+  const project = createWorkspaceEntry({ parentId: null, name: 'bounded-search', kind: 'project' });
+  const root = localPathOf(project.id);
+  mkdirSync(join(root, '成果'));
+  for (let index = 0; index < 20; index++)
+    writeFileSync(join(root, '成果', `成果-${index}.md`), '');
+  state.execFile.mockClear();
+  const found = await searchLocalWorkspace(project.id, '成果', undefined, {
+    maxFiles: 10,
+    decorateGit: false,
+  });
+  expect(found.filter((item) => item.kind === 'file')).toHaveLength(10);
+  expect(state.execFile).not.toHaveBeenCalled();
+});

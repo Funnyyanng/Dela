@@ -20,7 +20,12 @@ import {
   archiveCanvasCourse,
 } from './api';
 import type { CanvasState } from '../../shared/api';
-import { configureLocalCanvasSync, getLocalCanvasSyncState, syncLocalCanvas } from './local-sync';
+import {
+  configureLocalCanvasSync,
+  getLocalCanvasSyncState,
+  localSyncOptionsSchema,
+  syncLocalCanvas,
+} from './local-sync';
 
 export function registerCanvasIpc(invalidateSessions: () => void = () => {}) {
   const handle = (name: string, fn: (...args: unknown[]) => unknown) =>
@@ -84,8 +89,8 @@ export function registerCanvasIpc(invalidateSessions: () => void = () => {}) {
       invalidateSessions();
     return state;
   });
-  handle('sync-local', async () => {
-    const result = await syncLocalCanvas();
+  handle('sync-local', async (input) => {
+    const result = await syncLocalCanvas(localSyncOptionsSchema.parse(input ?? {}));
     broadcastCanvasState();
     return result;
   });

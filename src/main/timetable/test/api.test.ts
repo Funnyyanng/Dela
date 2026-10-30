@@ -4,7 +4,7 @@ import { deleteCalendarEvent, parseSemesterStart, parseWeekNumbers } from '../ap
 import { getDatabase } from '../../database';
 
 vi.mock('electron', () => ({
-  BrowserWindow: {},
+  BrowserWindow: { getAllWindows: () => [] },
   ipcMain: {},
   session: {},
   net: { request: vi.fn() },

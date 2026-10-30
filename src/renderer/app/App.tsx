@@ -26,7 +26,13 @@ import { GlobalSearchDialog } from '../features/search/GlobalSearchDialog';
 import { TimetableView } from '../features/timetable';
 import { TodoView } from '../features/todo/TodoView';
 import { LearningView } from '../features/learning/LearningView';
+import { TodayView } from '../features/today/TodayView';
+import { TaskCenterView } from '../features/jobs/TaskCenterView';
+import { useInitializeJobs } from '../features/jobs/store';
+import { LifeView } from '../features/life/LifeView';
+import { ProjectsView } from '../features/projects/ProjectsView';
 import type { ChatSessionSummary, GlobalSearchResult } from '../../shared/api';
+import { workspacePathAffected } from '../../shared/workspace';
 import type { NavSessionSummary } from '../navigation/ProjectSessionNav';
 import { useRuns } from '../sessions/runs';
 import { useSessions, updateSession } from '../sessions/store';
@@ -77,6 +83,7 @@ function useSessionNavData(): { sessionsByProject: Record<string, NavSessionSumm
 }
 
 export default function App() {
+  useInitializeJobs();
   const [searchOpen, setSearchOpen] = useState(false);
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer | null>(null);
   // 首次启动引导：flow 期间主界面不渲染；completion 时主界面已挂载、完成动画叠在其上渐隐。
@@ -108,6 +115,8 @@ export default function App() {
   }, [launchStage, setupCheck]);
 
   const view = useNavigationStore((state) => state.view);
+  const jobRequestId = useNavigationStore((state) => state.jobRequestId);
+  const lifeRequestDate = useNavigationStore((state) => state.lifeRequestDate);
   const projectId = useNavigationStore((state) => state.projectId);
   const canBack = useNavigationStore((state) => state.backStack.length > 0);
   const canForward = useNavigationStore((state) => state.forwardStack.length > 0);
@@ -211,6 +220,8 @@ export default function App() {
       if (action === 'new-chat') navigation.openGeneralChat(true);
       else if (action === 'new-project') navigation.newProject();
       else if (action === 'open-settings') navigation.navigate('settings');
+      else if (action === 'open-jobs') navigation.navigate('jobs');
+      else if (action === 'open-today') navigation.navigate('today');
     });
   }, []);
 
@@ -260,7 +271,19 @@ export default function App() {
     else if (target.page === 'chat') navigation.openChat(target.sessionId, target.projectId);
     else if (target.page === 'mail') navigation.openMail(target.messageId);
     else if (target.page === 'sources') navigation.openDocument(`source:${target.sourceId}`);
-    else if (target.page === 'todo') navigation.openTodo(target.todoId);
+    else if (target.page === 'local-file') {
+      const owner = useWorkspaceStore
+        .getState()
+        .workspace.entries.filter(
+          (entry) =>
+            entry.kind === 'project' &&
+            !entry.remoteId &&
+            entry.path &&
+            workspacePathAffected(target.entryId, entry.path),
+        )
+        .sort((a, b) => (b.path?.length ?? 0) - (a.path?.length ?? 0))[0];
+      if (!owner || navigation.openProject(owner.id)) navigation.openDocument(target.entryId);
+    } else if (target.page === 'todo') navigation.openTodo(target.todoId);
     else navigation.openSettings(target.section);
   };
 
@@ -345,6 +368,10 @@ export default function App() {
                   {view === 'classroom' && <ClassroomView />}
                   {view === 'todo' && <TodoView request={todoRequest ?? undefined} />}
                   {view === 'learning' && <LearningView />}
+                  {view === 'today' && <TodayView />}
+                  {view === 'jobs' && <TaskCenterView requestId={jobRequestId} />}
+                  {view === 'life' && <LifeView date={lifeRequestDate} />}
+                  {view === 'projects' && <ProjectsView />}
                   {view === 'notifications' && (
                     <NotificationsView
                       state={notifications.notifications}

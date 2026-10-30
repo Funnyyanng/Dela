@@ -261,13 +261,19 @@ export function TodoView({ request }: { request?: { id: string } }) {
   const items =
     state?.items.filter(
       (item) =>
+        !item.archived &&
+        !item.recurrence &&
         (filter === 'all' || item.source === filter) &&
         (showCompleted || !todoCompleted(item.status)),
     ) ?? [];
   const undatedCount = (source: 'all' | 'canvas' | 'personal') =>
     (state?.items ?? []).filter(
       (item) =>
-        !item.dueAt && !todoCompleted(item.status) && (source === 'all' || item.source === source),
+        !item.archived &&
+        !item.recurrence &&
+        !item.dueAt &&
+        !todoCompleted(item.status) &&
+        (source === 'all' || item.source === source),
     ).length;
   const openItem = (id: string) => {
     setDetailId(id);

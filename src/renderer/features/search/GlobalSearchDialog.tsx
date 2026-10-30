@@ -29,6 +29,7 @@ const resultGroups: ReadonlyArray<{
   { kind: 'project', label: '本地项目', icon: FolderKanban, note: '最多 10 条' },
   { kind: 'chat', label: '聊天对话', icon: MessageSquare, note: '最多 10 条' },
   { kind: 'mail', label: '邮件', icon: Mail, note: '最多 10 条' },
+  { kind: 'local-file', label: '本地文件与成果', icon: FileText, note: '最多 10 条' },
   { kind: 'course-file', label: '课程资料', icon: FileText, note: '最多 10 条' },
   { kind: 'todo', label: 'TODO / 作业', icon: CircleCheckBig, note: '最多 10 条' },
   { kind: 'setting', label: '设置', icon: Settings },
@@ -145,7 +146,10 @@ export function GlobalSearchDialog({
   };
 
   const settingsMatches = settingsResultsFor(query);
-  const allResults = [...settingsMatches, ...results];
+  const matches = [...settingsMatches, ...results];
+  const allResults = resultGroups.flatMap((group) =>
+    matches.filter((result) => result.kind === group.kind),
+  );
   const hasContent = allResults.length > 0;
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -196,7 +200,7 @@ export function GlobalSearchDialog({
             <Search aria-hidden="true" className="size-4 shrink-0 text-ink-3" strokeWidth={1.8} />
             <Dialog.Title className="sr-only">全局搜索</Dialog.Title>
             <Dialog.Description className="sr-only">
-              搜索已同步到本机的项目、聊天、邮件、课程资料文件名和设置入口。
+              搜索已关联目录的本地文件与成果，以及项目、聊天、邮件、Canvas资料文件名和设置入口。
             </Dialog.Description>
             <input
               aria-activedescendant={
@@ -209,7 +213,7 @@ export function GlobalSearchDialog({
               className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-ink-3"
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="搜索项目、聊天、邮件或课程资料…"
+              placeholder="搜索文件、成果、项目、聊天或课程资料…"
               ref={inputRef}
               role="combobox"
               maxLength={200}
@@ -241,7 +245,9 @@ export function GlobalSearchDialog({
             ) : null}
             {!hasContent && !refreshing && !error ? (
               <p className="px-3 py-5 text-13 text-ink-3">
-                {isRecent ? '还没有可显示的最近记录。' : '没有找到匹配的本地数据。'}
+                {isRecent
+                  ? '还没有最近记录。输入文件名可搜索已关联目录。'
+                  : '没有找到匹配的本地数据。'}
               </p>
             ) : null}
             {hasContent ? (

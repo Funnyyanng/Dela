@@ -140,6 +140,76 @@ export interface StoredSource {
   updatedAt?: string | null;
   pageUrl?: string;
   assignmentRequirements?: CanvasAssignmentRequirements;
+  quizId?: number;
+}
+
+export async function syncCanvasAssignment(
+  courseId: number,
+  assignmentId: number,
+): Promise<StoredSource> {
+  const detail = row(
+    await (
+      await request(`courses/${courseId}/assignments/${assignmentId}?include[]=submission`)
+    ).json(),
+  );
+  if (
+    num(detail.id) !== assignmentId ||
+    (detail.course_id !== undefined && num(detail.course_id) !== courseId)
+  )
+    throw new Error('Canvas 作业身份不匹配');
+  const source: StoredSource = {
+    id: `assignment:${assignmentId}`,
+    courseId,
+    title: str(detail.name),
+    kind: 'assignment',
+    html: str(detail.description),
+    dueAt: str(detail.due_at) || null,
+    url: str(detail.html_url),
+    updatedAt: str(detail.updated_at) || null,
+    assignmentRequirements: canvasAssignmentRequirements(detail),
+    quizId: num(detail.quiz_id) || undefined,
+  };
+  if (source.quizId) {
+    const quiz = row(await (await request(`courses/${courseId}/quizzes/${source.quizId}`)).json());
+    if (num(quiz.id) !== source.quizId) throw new Error('Canvas 测试身份不匹配');
+    source.html = str(quiz.description) || source.html;
+  }
+  const db = getDatabase();
+  db.transaction(() => {
+    db.prepare('INSERT OR REPLACE INTO canvas_sources VALUES (?, ?, ?)').run(
+      source.id,
+      courseId,
+      JSON.stringify(source),
+    );
+    const stored = db.prepare('SELECT items FROM canvas_courses WHERE id=?').get(courseId) as
+      { items: string } | undefined;
+    if (!stored) throw new Error('课程不存在，请刷新课程列表');
+    const items: SourceItem[] = JSON.parse(stored.items);
+    const parentId = `${courseId}:assignments`;
+    if (!items.some((item) => item.id === parentId))
+      items.push({
+        id: parentId,
+        parentId: null,
+        courseId,
+        name: '作业',
+        kind: 'folder',
+        sourceId: null,
+      });
+    const item: SourceItem = {
+      id: source.id,
+      parentId,
+      courseId,
+      name: source.title,
+      kind: 'assignment',
+      sourceId: source.id,
+      dueAt: source.dueAt,
+    };
+    const index = items.findIndex((item) => item.id === source.id);
+    if (index === -1) items.push(item);
+    else items[index] = item;
+    db.prepare('UPDATE canvas_courses SET items=? WHERE id=?').run(JSON.stringify(items), courseId);
+  })();
+  return source;
 }
 
 const syncing = new Map<number, Promise<CanvasState>>();

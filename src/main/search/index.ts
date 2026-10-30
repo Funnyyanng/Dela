@@ -138,9 +138,51 @@ export function queryGlobalSearch(query: string): GlobalSearchResult[] {
   ];
 }
 
+/** 搜索已关联的本地目录；仅匹配文件名，不读取内容或扫描其他目录。 */
+export async function queryWorkspaceGlobalSearch(
+  query: string,
+  signal?: AbortSignal,
+): Promise<GlobalSearchResult[]> {
+  query = querySchema.parse(query);
+  const cached = queryGlobalSearch(query);
+  if (!query || signal?.aborted) return cached;
+  const { searchLocalWorkspace } = await import('../workspace/local-tree');
+  const entries = await searchLocalWorkspace(null, query, signal, {
+    maxFiles: perKindLimit,
+    decorateGit: false,
+  });
+  if (signal?.aborted) return [];
+  return [
+    ...entries
+      .filter(
+        (item) =>
+          item.kind === 'file' && item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+      )
+      .slice(0, perKindLimit)
+      .map((item) => ({
+        kind: 'local-file' as const,
+        id: item.id,
+        title: item.name,
+        subtitle: item.path ?? null,
+        target: { page: 'local-file' as const, entryId: item.id },
+      })),
+    ...cached,
+  ];
+}
+
 export function registerSearchIpc(): void {
-  ipcMain.handle('search:query', (event, query: unknown) => {
+  const requests = new Map<number, AbortController>();
+  ipcMain.handle('search:query', async (event, query: unknown) => {
     checkWorkspaceSender(event);
-    return queryGlobalSearch(querySchema.parse(query));
+    const value = querySchema.parse(query);
+    const sender = event.sender.id;
+    requests.get(sender)?.abort();
+    const controller = new AbortController();
+    requests.set(sender, controller);
+    try {
+      return await queryWorkspaceGlobalSearch(value, controller.signal);
+    } finally {
+      if (requests.get(sender) === controller) requests.delete(sender);
+    }
   });
 }

@@ -208,6 +208,7 @@ export async function searchLocalWorkspace(
   rootId: string | null,
   query: string,
   signal?: AbortSignal,
+  options: { maxFiles?: number; decorateGit?: boolean } = {},
 ): Promise<WorkspaceEntry[]> {
   const stored = storedEntries();
   const roots = rootId ? [entry(rootId)] : (await getLocalWorkspaceState()).entries;
@@ -215,6 +216,7 @@ export async function searchLocalWorkspace(
   const seen = new Set<string>();
   const pending = roots.map((item) => ({ item, ancestors: [] as WorkspaceEntry[] }));
   const needle = query.toLocaleLowerCase();
+  let matchingFiles = 0;
   while (pending.length) {
     if (signal?.aborted) return [];
     const { item, ancestors } = pending.pop()!;
@@ -223,6 +225,8 @@ export async function searchLocalWorkspace(
     if (item.name.toLocaleLowerCase().includes(needle)) {
       for (const parent of ancestors) found.set(parent.id, parent);
       found.set(item.id, item);
+      if (item.kind === 'file') matchingFiles += 1;
+      if (options.maxFiles && matchingFiles >= options.maxFiles) break;
     }
     if (
       !item.path ||
@@ -238,7 +242,7 @@ export async function searchLocalWorkspace(
     }
   }
   const results = [...found.values()];
-  if (!query.trim()) return results;
+  if (!query.trim() || options.decorateGit === false) return results;
   // 搜索结果按根批量修饰，避免遍历每个目录时启动 Git。
   const directories = rootId
     ? roots

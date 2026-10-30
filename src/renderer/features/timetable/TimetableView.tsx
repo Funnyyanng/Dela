@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarRange, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
-import type { CalendarEvent, TimetableLesson, TimetableState, TodoItem } from '../../../shared/api';
+import type { CalendarEvent, TimetableLesson, TimetableState } from '../../../shared/api';
 import { Button } from '../../components/ui/button';
 import { DesktopOnlyNotice } from '../../components/ui/desktop-only-notice';
 import {
@@ -57,7 +57,6 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
   const [state, setState] = useState<TimetableState | null>(null);
   const [lessons, setLessons] = useState<TimetableLesson[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [todoItems, setTodoItems] = useState<TodoItem[]>([]);
   const [semester, setSemester] = useState<string | null>(null);
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [month, setMonth] = useState(() => startOfDay(new Date()));
@@ -95,7 +94,8 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
   }, [loadSemester]);
 
   const semesterWeekStart = weekStartFor(state?.semesterStart ?? null, selectedWeek);
-  const visibleWeekStart = semesterWeekStart ?? mondayOf(new Date());
+  const visibleWeekStart =
+    semesterWeekStart ?? addDays(mondayOf(new Date()), (selectedWeek - 1) * 7);
   const monthStart = new Date(month.getFullYear(), month.getMonth(), 1);
   const monthGridStart = mondayOf(monthStart);
   const nextMonth = new Date(month.getFullYear(), month.getMonth() + 1, 1);
@@ -103,42 +103,20 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
   const eventRangeStart = mode === 'week' ? visibleWeekStart : monthGridStart;
   const eventRangeEnd = mode === 'week' ? addDays(visibleWeekStart, 7) : monthGridEnd;
 
-  // 写入日历的个人待办派生为 30 分钟事件块、止于截止时刻；id 走 `todo:` 前缀命名空间。
-  const todoEvents = useMemo(() => {
-    const rangeStart = eventRangeStart.getTime();
-    const rangeEnd = eventRangeEnd.getTime();
-    return todoItems.flatMap((todo) => {
-      if (todo.source !== 'personal' || !todo.calendar || !todo.dueAt) return [];
-      const dueAt = Date.parse(todo.dueAt);
-      if (dueAt < rangeStart || dueAt > rangeEnd) return [];
-      return [
-        {
-          id: `todo:${todo.id}`,
-          todoId: todo.id,
-          title: todo.title,
-          startAt: new Date(dueAt - 30 * 60_000).toISOString(),
-          endAt: todo.dueAt,
-          location: null,
-          color: todo.color ?? null,
-        } satisfies CalendarEvent,
-      ];
-    });
-    // 依赖写法沿用 .getTime() 内联形式：React Compiler 无法证明派生数值稳定，具名 deps 会触发
-    // preserve-manual-memoization 告警。
-  }, [todoItems, eventRangeStart.getTime(), eventRangeEnd.getTime()]);
-  const calendarEvents = useMemo(() => [...events, ...todoEvents], [events, todoEvents]);
+  const calendarEvents = events;
 
   const loadEvents = useCallback(async () => {
     const request = ++eventsRequest;
-    const nextEvents = await timetable.listEvents(
-      eventRangeStart.toISOString(),
-      eventRangeEnd.toISOString(),
-    );
+    const nextEvents = await timetable.querySchedule({
+      startAt: eventRangeStart.toISOString(),
+      endAt: eventRangeEnd.toISOString(),
+      ...(semester ? { semester } : {}),
+    });
     if (eventsRequest !== request) return;
-    setEvents([...nextEvents]);
+    setEvents(nextEvents.items.filter((item) => item.source !== 'course'));
     // 依赖写法沿用 .getTime() 内联形式：React Compiler 无法证明派生数值稳定，具名 deps 会触发
     // preserve-manual-memoization 告警。
-  }, [timetable, eventRangeStart.getTime(), eventRangeEnd.getTime()]);
+  }, [timetable, semester, eventRangeStart.getTime(), eventRangeEnd.getTime()]);
 
   useEffect(() => {
     void loadEvents().catch((reason: unknown) => setError(errorText(reason)));
@@ -157,23 +135,17 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
     [loadEvents],
   );
 
-  // 写入日历的个人待办由待办状态广播驱动：增删改后无需手动刷新日历。
   useEffect(() => {
-    const api = window.dela?.todo;
-    if (!api) return;
-    let active = true;
-    const off = api.onUpdate((value) => setTodoItems(value.items));
-    void api
-      .getState()
-      .then((value) => {
-        if (active) setTodoItems(value.items);
-      })
-      .catch((reason: unknown) => console.warn('[timetable] 加载个人待办失败', reason));
+    const reload = () => void loadEvents().catch((reason) => setError(errorText(reason)));
+    const off = window.dela?.todo.onUpdate(reload);
+    const offLife = window.dela?.life.onUpdate(reload);
+    const offTimetable = window.dela?.timetable.onUpdate(reload);
     return () => {
-      active = false;
-      off();
+      off?.();
+      offLife?.();
+      offTimetable?.();
     };
-  }, []);
+  }, [loadEvents]);
 
   const weeks = useMemo(() => {
     const found = [...new Set(lessons.flatMap((lesson) => lesson.weekNumbers))].sort(
@@ -235,7 +207,27 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
   };
 
   if (!state || !semester) {
-    return <div className="grid h-full place-items-center text-13 text-ink-3">正在读取课表…</div>;
+    return (
+      <div className="grid h-full place-items-center text-13 text-ink-3">
+        <div className="space-y-3">
+          {error ? (
+            <>
+              <p role="alert">{error}</p>
+              <Button
+                onClick={() => {
+                  setError(null);
+                  void loadSemester().catch((reason) => setError(errorText(reason)));
+                }}
+              >
+                重试
+              </Button>
+            </>
+          ) : (
+            <p role="status">正在读取日历…</p>
+          )}
+        </div>
+      </div>
+    );
   }
 
   const weekEnd = addDays(visibleWeekStart, 6);
@@ -382,16 +374,44 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
         </p>
       ) : null}
 
-      {!state.lastSyncedAt ? (
-        <div className="grid flex-1 place-items-center p-6">
+      {!state.lastSyncedAt && (
+        <details className="mx-4 my-2 rounded-control border border-line p-3 text-sm">
+          <summary>课程尚未同步；个人日程与截止事项可以正常使用</summary>
           <TimetableConnectCard semester={semester} onSuccess={() => void loadSemester(semester)} />
-        </div>
-      ) : mode === 'week' ? (
+        </details>
+      )}
+      {mode === 'week' && calendarEvents.some((event) => event.deadline) && (
+        <section className="max-h-36 overflow-auto border-b px-4 py-3" aria-label="本周截止事项">
+          <p className="text-xs text-ink-3">本周截止事项（不占用日程时段）</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {calendarEvents
+              .filter((event) => event.deadline)
+              .map((event) => (
+                <button
+                  key={event.id}
+                  type="button"
+                  className="rounded-control bg-inset px-2 py-1 text-left text-xs hover:bg-hover"
+                  onClick={() => setDetail({ kind: 'todo', event })}
+                >
+                  {new Date(event.startAt).toLocaleString('zh-CN', {
+                    timeZone: 'Asia/Shanghai',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}{' '}
+                  · {event.title}
+                </button>
+              ))}
+          </div>
+        </section>
+      )}
+      {mode === 'week' ? (
         <WeekCalendar
-          events={semesterWeekStart ? calendarEvents : []}
+          events={calendarEvents.filter((event) => !event.deadline)}
           lessons={weekLessons}
           onOpen={setDetail}
-          weekStart={semesterWeekStart}
+          weekStart={visibleWeekStart}
         />
       ) : (
         <MonthCalendar
@@ -399,6 +419,7 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
           lessons={lessons}
           month={month}
           onCreate={openNewEvent}
+          onOpen={setDetail}
           onEditSemesterStart={() => setSemesterDraft(true)}
           semesterStart={state.semesterStart}
         />
@@ -410,13 +431,6 @@ function DesktopTimetableView({ onOpenTodo }: { onOpenTodo?: (todoId: string) =>
           onClose={() => setEventDraft(null)}
           onCreated={() => {
             setEventDraft(null);
-            // 课表尚未同步时日历区显示的是登录卡，事件已落库但无处可见，须明确告知。
-            if (!state.lastSyncedAt)
-              showToast({
-                variant: 'success',
-                title: '事件已保存',
-                description: '同步课表后会在日历中显示',
-              });
             void loadEvents();
           }}
         />

@@ -29,6 +29,7 @@ vi.mock('../system', () => ({
 
 import {
   getNotificationState,
+  publishLocalNotification,
   markAllNotificationsRead,
   markNotificationRead,
   refreshNotifications,
@@ -88,6 +89,28 @@ describe('local notification inbox', () => {
       getDatabase().prepare('UPDATE mail_messages SET seen = 1 WHERE deleted_at IS NULL').run();
       return { ok: true };
     });
+  });
+
+  it('persists job and life notifications with deep links and deduplicates delivery', async () => {
+    const item = {
+      id: 'jobs:one:1',
+      source: 'jobs' as const,
+      title: '任务结束',
+      body: '已保存原稿',
+      createdAt: new Date().toISOString(),
+      readAt: null,
+      href: { kind: 'job' as const, jobId: 'one' },
+    };
+    publishLocalNotification(item);
+    publishLocalNotification({ ...item, id: 'life:one', source: 'life', href: { kind: 'life' } });
+    expect(getNotificationState().unreadCount).toBe(2);
+    expect(getNotificationState('jobs').items[0]?.href).toEqual({ kind: 'job', jobId: 'one' });
+    await markNotificationRead(item.id);
+    publishLocalNotification(item);
+    expect(getNotificationState('jobs').items[0]?.readAt).not.toBeNull();
+    expect(systemNotifyItem).toHaveBeenCalledTimes(2);
+    await markAllNotificationsRead();
+    expect(getNotificationState().unreadCount).toBe(0);
   });
 
   it('collects cached unread inbox mail and does not resurrect a locally read notification', async () => {

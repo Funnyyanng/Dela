@@ -41,6 +41,7 @@ import {
 } from './extensions';
 import { packagesEnabled } from './packages';
 import type { ChatSlashCommand } from '../../shared/chat';
+import type { RunEvent } from '../../shared/session';
 
 type ChatMessage = WorkspaceChat['messages'][number];
 
@@ -65,6 +66,20 @@ interface Live {
 
 const live = new Map<string, Live>();
 const clients = new Set<WebContents>();
+const runListeners = new Set<(event: RunEvent) => void>();
+const managedSessions = new Set<string>();
+
+export function subscribeRunEvents(listener: (event: RunEvent) => void): () => void {
+  runListeners.add(listener);
+  return () => {
+    runListeners.delete(listener);
+  };
+}
+
+export function markManagedSession(sessionId: string, managed = true): void {
+  if (managed) managedSessions.add(sessionId);
+  else managedSessions.delete(sessionId);
+}
 
 export function subscribeChat(client: WebContents) {
   if (clients.has(client)) return;
@@ -621,13 +636,15 @@ function runEvent(
   changesError?: string,
 ) {
   const entry = live.get(sessionId);
-  send('session:on-run-event', {
+  const event: RunEvent = {
     sessionId,
     runId: finishedRunId ?? entry?.run?.id ?? '',
     status,
     activeTool,
     ...(changesError ? { changesError } : {}),
-  });
+  };
+  for (const listener of runListeners) listener(event);
+  send('session:on-run-event', event);
 }
 
 // ===== Session API =====
@@ -884,7 +901,7 @@ export async function askSession(id: string, input: ChatAskInput): Promise<Works
       touch(id, entry);
       runEvent(id, status, undefined, turnId, changesError);
       publish(id);
-      if (status !== 'stopped') notifyRunFinished(id, status);
+      if (status !== 'stopped' && !managedSessions.has(id)) notifyRunFinished(id, status);
       if (entry.stale) void disposeLive(id, entry, 'reload');
     } finally {
       finishRun();

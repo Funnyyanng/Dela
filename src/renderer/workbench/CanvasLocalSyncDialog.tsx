@@ -142,6 +142,15 @@ export function CanvasLocalSyncDialog({ onClose }: { onClose: () => void }) {
                   新增 {result.added} · 更新 {result.updated} · 沿用已有文件 {result.adopted} ·
                   未变化 {result.unchanged}
                 </p>
+                {result.scope && !result.scope.completeLibrary && (
+                  <p className="text-ink-3">
+                    本次仅更新 {result.scope.courseIds.length} 门课程
+                    {result.scope.assignmentIds
+                      ? `中的 ${result.scope.assignmentIds.length} 份作业`
+                      : ''}
+                    ，其他课程与总览保留上次记录。
+                  </p>
+                )}
                 <p className="text-ink-3">上次同步：{new Date(result.syncedAt).toLocaleString()}</p>
                 {!!result.conflicts.length && (
                   <details>

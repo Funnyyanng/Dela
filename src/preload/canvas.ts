@@ -1,4 +1,5 @@
 import type { CanvasApi, CanvasState } from '../shared/api';
+import type { CanvasLocalSyncOptions } from '../shared/canvas-local';
 import { invoke, on } from './lib';
 
 export const canvas = {
@@ -16,6 +17,6 @@ export const canvas = {
   localSyncState: () => invoke('canvas:local-sync-state'),
   configureLocalSync: (courseIds: number[], directory?: string) =>
     invoke('canvas:configure-local-sync', courseIds, directory),
-  syncLocal: () => invoke('canvas:sync-local'),
+  syncLocal: (options?: CanvasLocalSyncOptions) => invoke('canvas:sync-local', options),
   onState: (listener: (state: CanvasState) => void) => on<CanvasState>('canvas:state', listener),
 } satisfies CanvasApi;

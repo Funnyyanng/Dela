@@ -11,6 +11,28 @@ import type { NotificationItem, TodoItem, TodoState } from '../../shared/api';
 import type { TodoCanvasCourse } from '../../shared/todo';
 import { systemNotifyItem } from '../notifications/system';
 
+const recurrenceDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }, '日期无效');
+const recurrenceSchema = z
+  .object({
+    frequency: z.enum(['daily', 'weekly', 'monthly']),
+    startDate: recurrenceDate,
+    endDate: recurrenceDate.optional(),
+    weekdays: z.array(z.number().int().min(1).max(7)).min(1).optional(),
+    monthDay: z.number().int().min(1).max(31).optional(),
+  })
+  .strict()
+  .refine(
+    (rule) => rule.frequency !== 'weekly' || Boolean(rule.weekdays?.length),
+    '请选择每周重复日期',
+  )
+  .refine((rule) => !rule.endDate || rule.endDate >= rule.startDate, '结束日期不得早于开始日期');
+
 const idSchema = z.string().min(1).max(512);
 export const todoSaveSchema = z
   .object({
@@ -21,6 +43,16 @@ export const todoSaveSchema = z
     completed: z.boolean().optional(),
     calendar: z.boolean().optional(),
     color: z.enum(calendarEventColors).optional(),
+    priority: z.enum(['low', 'normal', 'high']).optional(),
+    pinned: z.boolean().optional(),
+    order: z.number().finite().optional(),
+    estimateMinutes: z.number().int().min(1).max(10080).nullable().optional(),
+    area: z.enum(['inbox', 'life', 'course', 'project']).optional(),
+    projectId: z.string().min(1).nullable().optional(),
+    courseId: z.number().int().positive().nullable().optional(),
+    remindAt: z.string().datetime().nullable().optional(),
+    recurrence: recurrenceSchema.nullable().optional(),
+    archived: z.boolean().optional(),
   })
   .strict();
 type TodoRow = {
@@ -37,6 +69,7 @@ type SyncState = {
   canvasCourses?: TodoCanvasCourse[];
 };
 let activeRefresh: Promise<TodoState> | null = null;
+let activeCourseId: number | undefined;
 
 function canvasOwner(): string | null {
   const token = loadCanvasToken();
@@ -95,6 +128,13 @@ export function saveTodo(input: unknown): TodoState {
     : undefined;
   if (value.id && !existing) throw new Error('待办不存在，Canvas 作业的完成状态只能通过同步更新');
   const old = existing ? (JSON.parse(existing.data) as TodoItem) : undefined;
+  const recurrence = value.recurrence === undefined ? old?.recurrence : value.recurrence;
+  if (recurrence && value.completed !== undefined)
+    throw new Error('重复事项请按具体日期记录完成，不能一次完成整个系列');
+  const courseId = value.courseId === undefined ? old?.courseId : (value.courseId ?? undefined);
+  const course = courseId
+    ? getTodoState().canvasCourses?.find((item) => item.id === courseId)
+    : undefined;
   const now = new Date().toISOString();
   const item: TodoItem = {
     id: value.id ?? randomUUID(),
@@ -110,6 +150,23 @@ export function saveTodo(input: unknown): TodoState {
           : 'pending',
     calendar: value.calendar ?? old?.calendar ?? false,
     color: value.color ?? old?.color,
+    priority: value.priority ?? old?.priority ?? 'normal',
+    pinned: value.pinned ?? old?.pinned ?? false,
+    order: value.order ?? old?.order ?? 0,
+    estimateMinutes:
+      value.estimateMinutes === undefined ? old?.estimateMinutes : value.estimateMinutes,
+    area: value.area ?? old?.area ?? 'inbox',
+    projectId: value.projectId === undefined ? old?.projectId : value.projectId,
+    courseId,
+    courseName: courseId
+      ? (course?.name ?? (courseId === old?.courseId ? old?.courseName : undefined))
+      : undefined,
+    courseCode: courseId
+      ? (course?.code ?? (courseId === old?.courseId ? old?.courseCode : undefined))
+      : undefined,
+    remindAt: value.remindAt === undefined ? old?.remindAt : value.remindAt,
+    recurrence: value.recurrence === undefined ? old?.recurrence : value.recurrence,
+    archived: value.archived ?? old?.archived ?? false,
     createdAt: old?.createdAt ?? now,
     readAt: now,
   };
@@ -155,9 +212,17 @@ export function todoNotifications(): NotificationItem[] {
     });
 }
 
-export function refreshTodos(): Promise<TodoState> {
-  if (activeRefresh) return activeRefresh;
-  activeRefresh = syncCanvasTodos().then(
+export function refreshTodos(raw?: unknown): Promise<TodoState> {
+  const { courseId } = z
+    .object({ courseId: z.number().int().positive().optional() })
+    .strict()
+    .parse(raw ?? {});
+  if (activeRefresh) {
+    if (!activeCourseId || activeCourseId === courseId) return activeRefresh;
+    return activeRefresh.catch(() => undefined).then(() => refreshTodos({ courseId }));
+  }
+  activeCourseId = courseId;
+  activeRefresh = syncCanvasTodos(courseId).then(
     () => {
       activeRefresh = null;
       return broadcastTodos();
@@ -172,7 +237,7 @@ export function refreshTodos(): Promise<TodoState> {
   return activeRefresh;
 }
 
-async function syncCanvasTodos(): Promise<TodoState> {
+async function syncCanvasTodos(courseId?: number): Promise<TodoState> {
   const owner = canvasOwner();
   if (!owner) return getTodoState();
   const db = getDatabase();
@@ -181,13 +246,25 @@ async function syncCanvasTodos(): Promise<TodoState> {
   const errors: string[] = [];
   let canvasCourses = previous.canvasCourses;
   try {
-    const courses = await listTodoCanvasCourses();
+    const cachedCourse = courseId
+      ? previous.canvasCourses?.find((course) => course.id === courseId)
+      : undefined;
+    const discovered = cachedCourse ? [cachedCourse] : await listTodoCanvasCourses();
+    const courses = courseId ? discovered.filter((course) => course.id === courseId) : discovered;
+    if (courseId && !courses.length) throw new Error('这门课程不在当前有效选课中');
     if (canvasOwner() !== owner) return getTodoState();
-    canvasCourses = courses.map((course) => ({
+    const refreshedCourses = courses.map((course) => ({
       ...course,
       syncedAt: previous.canvasCourses?.find((item) => item.id === course.id)?.syncedAt ?? null,
       error: null,
     }));
+    canvasCourses = courseId
+      ? [
+          ...(previous.canvasCourses ?? []).filter((course) => course.id !== courseId),
+          ...refreshedCourses,
+        ]
+      : refreshedCourses;
+    const requestedCourseId = courseId;
     const activeIds = new Set(courses.map((course) => course.id));
     const cached = db.prepare('SELECT id, data FROM todo_items WHERE owner=?').all(owner) as {
       id: string;
@@ -196,7 +273,7 @@ async function syncCanvasTodos(): Promise<TodoState> {
     db.transaction(() => {
       for (const item of cached) {
         const courseId = (JSON.parse(item.data) as TodoItem).courseId;
-        if (courseId !== undefined && !activeIds.has(courseId))
+        if (!requestedCourseId && courseId !== undefined && !activeIds.has(courseId))
           db.prepare('DELETE FROM todo_items WHERE id=? AND owner=?').run(item.id, owner);
       }
     })();
@@ -289,15 +366,26 @@ async function syncCanvasTodos(): Promise<TodoState> {
     errors.push(message);
     canvasCourses = canvasCourses?.map((course) => ({
       ...course,
-      error: message,
+      error: !courseId || course.id === courseId ? message : course.error,
     }));
   }
   if (canvasOwner() === owner) {
     db.prepare('INSERT OR REPLACE INTO workspace_settings(key, value) VALUES (?, ?)').run(
       `todo-sync:${owner}`,
       JSON.stringify({
-        syncedAt: errors.length ? previous.syncedAt : new Date().toISOString(),
-        error: errors.join('\n') || null,
+        syncedAt: courseId || errors.length ? previous.syncedAt : new Date().toISOString(),
+        error:
+          (courseId
+            ? [
+                ...(canvasCourses ?? [])
+                  .filter((course) => course.error)
+                  .map((course) => `${course.name}：${course.error}`),
+                ...(errors.length && !canvasCourses?.some((course) => course.id === courseId)
+                  ? errors
+                  : []),
+              ]
+            : errors
+          ).join('\n') || null,
         courses: [...successful],
         canvasCourses,
       } satisfies SyncState),

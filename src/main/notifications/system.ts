@@ -68,7 +68,8 @@ function showToast(title: string, body: string, onClick: () => void): void {
 
 /** 新增通知的桌面提示入口；守卫不满足时静默返回，不影响通知收集。 */
 export function systemNotifyItem(item: NotificationItem): void {
-  if (!armed || !Notification.isSupported() || snoozed() || !campusNotificationsEnabled()) return;
+  if (!armed || !Notification.isSupported() || snoozed()) return;
+  if (item.source !== 'jobs' && item.source !== 'life' && !campusNotificationsEnabled()) return;
   const window = workspaceWindow();
   // 窗口不存在（尚未创建）或正被使用时不打扰；收起到托盘的窗口不聚焦，正常弹出。
   if (!window || window.isFocused()) return;

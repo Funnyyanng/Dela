@@ -1,4 +1,4 @@
-import type { WebContents } from 'electron';
+import { BrowserWindow, type WebContents } from 'electron';
 import { z } from 'zod';
 import {
   calendarEventColors,
@@ -8,6 +8,11 @@ import {
   type TimetableState,
 } from '../../shared/api';
 import { getDatabase } from '../database';
+import { getTodoState } from '../todo';
+import { getLifeState } from '../life';
+import { shanghaiDate } from '../../shared/life';
+import { todoCompleted } from '../../shared/todo';
+import type { ScheduleResult } from '../../shared/timetable';
 import { lessonOccurrences } from '../../shared/schedule';
 import {
   CampusAuthError,
@@ -16,6 +21,12 @@ import {
   getCampusSession,
   openCampusLoginWindow,
 } from '../campus';
+
+function broadcastSchedule() {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('timetable:updated');
+  }
+}
 
 const CAMPUS_ORIGIN = 'https://i.sjtu.edu.cn';
 const LOGIN_URL = `${CAMPUS_ORIGIN}/jaccountlogin`;
@@ -47,7 +58,10 @@ const responseSchema = z
   })
   .passthrough();
 const semesterSchema = z.string().regex(/^\d{4}-\d{4}-[123]$/);
-const dateTimeSchema = z.string().datetime();
+const dateTimeSchema = z
+  .string()
+  .datetime({ offset: true })
+  .transform((value) => new Date(value).toISOString());
 const calendarEventSchema = z
   .object({
     title: z.string().trim().min(1).max(120),
@@ -308,6 +322,7 @@ export async function syncTimetable(semester: string): Promise<TimetableResult> 
            semester_start = COALESCE(excluded.semester_start, timetable_sync.semester_start)`,
       ).run(semester, syncedAt, semesterStart);
     })();
+    broadcastSchedule();
     return { ok: true };
   } catch (error) {
     return {
@@ -331,8 +346,8 @@ export function listLessons(semester: string): TimetableLesson[] {
 export const scheduleQuerySchema = z
   .object({
     semester: semesterSchema.optional(),
-    startAt: z.string().datetime(),
-    endAt: z.string().datetime(),
+    startAt: dateTimeSchema,
+    endAt: dateTimeSchema,
   })
   .strict()
   .refine(
@@ -342,7 +357,7 @@ export const scheduleQuerySchema = z
     '查询范围必须为正数且不超过一年',
   );
 
-export function querySchedule(input: unknown) {
+export function querySchedule(input: unknown): ScheduleResult {
   const args = scheduleQuerySchema.parse(input);
   const semester = args.semester ?? currentSemester();
   const row = syncRow(semester);
@@ -358,16 +373,86 @@ export function querySchedule(input: unknown) {
   }));
   const warnings = [...courses.warnings];
   if (!row?.last_synced_at) warnings.push('该学期课表尚未同步');
+  const todoState = getTodoState();
+  if (todoState.error) warnings.push(`Canvas作业同步未完成：${todoState.error}`);
   return {
     semester,
     timezone: 'Asia/Shanghai',
-    items: [...courses.items, ...events].sort((a, b) => a.startAt.localeCompare(b.startAt)),
+    items: [
+      ...courses.items.map((item) => ({
+        ...item,
+        id: `course:${item.lessonId}:${item.startAt}`,
+        color: null,
+      })),
+      ...events,
+      ...listDeadlines(args.startAt, args.endAt),
+    ].sort((a, b) => a.startAt.localeCompare(b.startAt)),
     coverage: {
       courseSyncedAt: row?.last_synced_at || null,
       complete: warnings.length === 0,
       warnings,
     },
   };
+}
+
+export function listDeadlines(
+  startAt: string,
+  endAt: string,
+): (CalendarEvent & { source: 'deadline' })[] {
+  const todos = getTodoState().items;
+  const deadlines = todos
+    .filter(
+      (item) =>
+        !item.archived &&
+        !item.recurrence &&
+        !todoCompleted(item.status) &&
+        item.dueAt &&
+        (item.source === 'canvas' || item.calendar),
+    )
+    .map((item) => ({
+      id: `todo:${item.id}`,
+      todoId: item.id,
+      title: `截止 · ${item.title}`,
+      startAt: item.dueAt!,
+      endAt: item.dueAt!,
+      location: null,
+      color: item.color ?? null,
+      deadline: true,
+      source: 'deadline' as const,
+    }));
+  const recurring = getLifeState({ startDate: shanghaiDate(startAt), endDate: shanghaiDate(endAt) })
+    .occurrences.filter(
+      (item) =>
+        !item.completed &&
+        todos.some((todo) => todo.id === item.todoId && todo.calendar && !todo.archived),
+    )
+    .map((item) => ({
+      id: `occurrence:${item.id}`,
+      todoId: item.todoId,
+      title: `截止 · ${item.title}`,
+      startAt: item.dueAt,
+      endAt: item.dueAt,
+      location: null,
+      color: null,
+      deadline: true,
+      source: 'deadline' as const,
+    }));
+  return [...deadlines, ...recurring].filter(
+    (item) =>
+      Date.parse(item.startAt) >= Date.parse(startAt) &&
+      Date.parse(item.startAt) < Date.parse(endAt),
+  );
+}
+
+export function updateCalendarEvent(rawId: unknown, input: unknown): CalendarEvent {
+  const id = z.number().int().positive().parse(rawId);
+  const event = calendarEventSchema.parse(input);
+  if (!getCalendarEvent(id)) throw new Error('日程不存在');
+  getDatabase()
+    .prepare('UPDATE calendar_events SET title=?,start_at=?,end_at=?,location=?,color=? WHERE id=?')
+    .run(event.title, event.startAt, event.endAt, event.location ?? null, event.color ?? null, id);
+  broadcastSchedule();
+  return getCalendarEvent(id)!;
 }
 
 export function listCalendarEvents(startValue: unknown, endValue: unknown) {
@@ -398,6 +483,7 @@ export function createCalendarEvent(input: unknown) {
       event.color || null,
       new Date().toISOString(),
     );
+  broadcastSchedule();
   return mapEvent({
     id: Number(result.lastInsertRowid),
     title: event.title,
@@ -412,6 +498,7 @@ export function deleteCalendarEvent(id: unknown) {
   // 只删自建事件；课程在 timetable_lessons 表，不经此入口。
   const eventId = z.number().int().positive().parse(id);
   getDatabase().prepare('DELETE FROM calendar_events WHERE id = ?').run(eventId);
+  broadcastSchedule();
 }
 
 /** calendar_events 表只读视图；不存在返回 null。 */
@@ -450,4 +537,5 @@ export function setSemesterStart(requested: unknown, value: unknown) {
         .regex(/^\d{4}-\d{2}-\d{2}$/)
         .parse(value),
     );
+  broadcastSchedule();
 }

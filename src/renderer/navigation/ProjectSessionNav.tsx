@@ -9,7 +9,7 @@ import {
   Cloud,
   Folder,
   FolderOpen,
-  House,
+  MessageCircle,
   MoreHorizontal,
   Plus,
   SquarePen,
@@ -48,6 +48,7 @@ import { navIcon, navRow, navSectionTitle, rowActions, rowIconButton } from './n
 import { useRemoteActivity } from './remote-activity';
 import { RemoteConnectionTip } from './remote-connection-tip';
 import { useRemoteConnections } from './remote-connections';
+import { useJobs } from '../features/jobs/store';
 
 export type { NavSessionSummary, SessionRunBadge };
 
@@ -103,6 +104,12 @@ export function ProjectSessionNav({
 }) {
   const entries = useWorkspaceStore((s) => s.workspace.entries);
   const visibleEntries = useVisibleNavEntries();
+  const jobCount = useJobs(
+    (state) =>
+      state.jobs.filter((job) =>
+        ['running', 'queued', 'needs_input', 'interrupted'].includes(job.status),
+      ).length,
+  );
   useEffect(() => {
     void useExperimental.getState().load();
   }, []);
@@ -404,33 +411,70 @@ export function ProjectSessionNav({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 功能入口、置顶与「项目」标题行固定在顶部；滚动只发生在项目列表项。 */}
       <nav aria-label="功能入口" className="grid shrink-0 gap-px">
+        {visibleEntries
+          .filter((item) => !item.campus)
+          .map((item) => {
+            const Icon = item.icon;
+            const active = item.id === 'sources' ? sourcesActive : item.id === activeBusinessId;
+            return (
+              <button
+                aria-current={active ? 'page' : undefined}
+                className={navRow(active)}
+                key={item.id}
+                onClick={() =>
+                  item.id === 'sources' ? onOpenSources?.() : onNavigateBusiness?.(item.id)
+                }
+                type="button"
+              >
+                <Icon className={navIcon(active)} strokeWidth={1.8} />
+                <span className={hidden}>{item.label}</span>
+                {item.id === 'jobs' && jobCount > 0 && (
+                  <span className="ml-auto rounded bg-inset px-1.5 text-xs tabular-nums">
+                    {jobCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        {visibleEntries.some((item) => item.campus) && (
+          <details
+            className="text-ink-3"
+            open={
+              visibleEntries.some((item) => item.campus && item.id === activeBusinessId) ||
+              undefined
+            }
+          >
+            <summary className={cn(navRow(false), 'cursor-pointer')}>
+              <ChevronRight className={navIcon(false)} />
+              <span className={hidden}>校园服务</span>
+            </summary>
+            {visibleEntries
+              .filter((item) => item.campus)
+              .map((item) => {
+                const Icon = item.icon;
+                return (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={navRow(item.id === activeBusinessId)}
+                    onClick={() => item.id !== 'sources' && onNavigateBusiness?.(item.id)}
+                  >
+                    <Icon className={navIcon(item.id === activeBusinessId)} />
+                    <span className={hidden}>{item.label}</span>
+                  </button>
+                );
+              })}
+          </details>
+        )}
         <button
           aria-current={generalChatActive ? 'page' : undefined}
           className={navRow(generalChatActive)}
           onClick={onOpenGeneralChat}
           type="button"
         >
-          <House className={navIcon(generalChatActive)} strokeWidth={1.8} />
-          <span className={hidden}>首页</span>
+          <MessageCircle className={navIcon(generalChatActive)} strokeWidth={1.8} />
+          <span className={hidden}>聊天</span>
         </button>
-        {visibleEntries.map((item) => {
-          const Icon = item.icon;
-          const active = item.id === 'sources' ? sourcesActive : item.id === activeBusinessId;
-          return (
-            <button
-              aria-current={active ? 'page' : undefined}
-              className={navRow(active)}
-              key={item.id}
-              onClick={() =>
-                item.id === 'sources' ? onOpenSources?.() : onNavigateBusiness?.(item.id)
-              }
-              type="button"
-            >
-              <Icon className={navIcon(active)} strokeWidth={1.8} />
-              <span className={hidden}>{item.label}</span>
-            </button>
-          );
-        })}
       </nav>
       {/* 置顶与「项目」标题行固定：钉住的内容常驻可见，滚动条也只覆盖项目列表项。 */}
       {(projects.some((project) => preferences[project.id]?.pinned) ||

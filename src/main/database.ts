@@ -5,6 +5,20 @@ import { mkdirSync } from 'node:fs';
 
 let database: Database.Database | null = null;
 
+const notificationSchema = `CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL CHECK(source IN ('mail', 'shuiyuan', 'jobs', 'life')),
+    account_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    read_at TEXT,
+    source_unread INTEGER NOT NULL DEFAULT 1,
+    href TEXT NOT NULL
+  )`;
+const notificationIndex = `CREATE INDEX IF NOT EXISTS idx_notifications_account_source_created
+    ON notifications (account_key, source, created_at DESC)`;
+
 const schema: string[] = [
   // 邮箱缓存（账户/文件夹/近端邮件窗口）。
   `CREATE TABLE IF NOT EXISTS mail_accounts (
@@ -135,19 +149,8 @@ const schema: string[] = [
     added_at TEXT NOT NULL
   )`,
   // 通知中心。
-  `CREATE TABLE IF NOT EXISTS notifications (
-    id TEXT PRIMARY KEY,
-    source TEXT NOT NULL CHECK(source IN ('mail', 'shuiyuan')),
-    account_key TEXT NOT NULL,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    read_at TEXT,
-    source_unread INTEGER NOT NULL DEFAULT 1,
-    href TEXT NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_notifications_account_source_created
-    ON notifications (account_key, source, created_at DESC)`,
+  notificationSchema,
+  notificationIndex,
   `CREATE TABLE IF NOT EXISTS notification_refreshes (
     source TEXT NOT NULL CHECK(source IN ('mail', 'shuiyuan')),
     account_key TEXT NOT NULL,
@@ -189,7 +192,7 @@ const createConsentRecords = `CREATE TABLE IF NOT EXISTS consent_records (
   accepted_at TEXT NOT NULL
 )`;
 
-const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 6;
 
 export function getDatabase(): Database.Database {
   if (database) return database;
@@ -204,6 +207,17 @@ export function getDatabase(): Database.Database {
       throw new Error('数据库格式不受支持，请使用当前版本创建的数据目录');
     db.transaction(() => {
       for (const statement of schema) db.exec(statement);
+      const notificationTable = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'")
+        .get() as { sql: string };
+      if (!notificationTable.sql.includes("'jobs'") || !notificationTable.sql.includes("'life'")) {
+        db.exec('ALTER TABLE notifications RENAME TO notifications_source_migration');
+        db.exec(notificationSchema);
+        db.exec(`INSERT INTO notifications (id,source,account_key,title,body,created_at,read_at,source_unread,href)
+          SELECT id,source,account_key,title,body,created_at,read_at,source_unread,href FROM notifications_source_migration`);
+        db.exec('DROP TABLE notifications_source_migration');
+        db.exec(notificationIndex);
+      }
       db.exec(createConsentRecords);
       db.pragma(`user_version = ${SCHEMA_VERSION}`);
     })();

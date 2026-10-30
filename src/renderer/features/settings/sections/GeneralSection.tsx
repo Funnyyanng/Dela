@@ -106,16 +106,17 @@ export function GeneralSection() {
         <SettingsGroup settingId="nav-entries" title="导航入口">
           {navEntries.map((entry) => {
             const available = entryAvailable(entry.id);
+            const fixed = entry.id === 'today' || entry.id === 'jobs';
             return (
               <SettingRow
-                description={available ? undefined : '功能已关闭'}
+                description={fixed ? '常驻入口' : available ? undefined : '功能已关闭'}
                 key={entry.id}
                 settingId={`nav-entry-${entry.id}`}
                 title={entry.label}
               >
                 <Switch
-                  checked={available && !hiddenEntries.includes(entry.id)}
-                  disabled={!available}
+                  checked={fixed || (available && !hiddenEntries.includes(entry.id))}
+                  disabled={fixed || !available}
                   label={`在导航中显示${entry.label}`}
                   onChange={(next) => setEntryVisible(entry.id, next)}
                 />

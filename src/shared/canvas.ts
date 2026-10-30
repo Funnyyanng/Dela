@@ -1,5 +1,9 @@
 import type { DocumentContent } from './documents';
-import type { CanvasLocalSyncResult, CanvasLocalSyncState } from './canvas-local';
+import type {
+  CanvasLocalSyncOptions,
+  CanvasLocalSyncResult,
+  CanvasLocalSyncState,
+} from './canvas-local';
 
 export interface CanvasCourse {
   id: number;
@@ -101,7 +105,7 @@ export interface CanvasApi {
   exportCourseFiles(courseIds: number[]): Promise<CanvasExportResult | null>;
   localSyncState(): Promise<CanvasLocalSyncState | null>;
   configureLocalSync(courseIds: number[], directory?: string): Promise<CanvasLocalSyncState | null>;
-  syncLocal(): Promise<CanvasLocalSyncResult>;
+  syncLocal(options?: CanvasLocalSyncOptions): Promise<CanvasLocalSyncResult>;
   /** 订阅后台目录同步推送的课程状态；返回退订函数。 */
   onState(listener: (state: CanvasState) => void): () => void;
 }

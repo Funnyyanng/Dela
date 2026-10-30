@@ -6,6 +6,7 @@ import { getDatabase } from '../database';
 import { storageDirectory } from '../storage';
 import { getAgentInstruction } from '../settings/prefs';
 import { localCourseContext } from '../canvas/local-sync';
+import { contextFor } from '../context';
 import { remoteProjectOf } from '../workspace/api';
 import { remoteById, targetOf } from '../remotes/api';
 import { remoteTools } from '../remotes/operations';
@@ -80,9 +81,11 @@ export function agentEnvironment() {
       ensureBuiltinSkills();
       const remote = projectId ? remoteProjectOf(projectId) : null;
       // 两个分支共用项目上下文与附加指令：远端多一条连接信息、换掉提示词，其余一样。
-      const shared = [project, instruction && `用户附加指令：\n${instruction}`].filter(
-        (part): part is string => Boolean(part),
-      );
+      const shared = [
+        project,
+        contextFor({ projectId }),
+        instruction && `用户附加指令：\n${instruction}`,
+      ].filter((part): part is string => Boolean(part));
       // Pi packages 本地与远程会话一视同仁：扩展代码始终在本机运行，这点在启用前的说明里讲清楚。
       const packages = {
         packages: enabledPackageSources(),

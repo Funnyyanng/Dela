@@ -47,6 +47,7 @@ export interface CalendarEvent {
   readonly color: CalendarEventColor | null;
   /** 非空表示这条事件由个人待办派生，值为待办 id；删除须走待办而非日历。 */
   readonly todoId?: string;
+  readonly deadline?: boolean;
 }
 
 export interface CalendarEventInput {
@@ -64,7 +65,21 @@ export interface TimetableResult {
   readonly reason?: 'auth';
 }
 
+export interface ScheduleResult {
+  semester: string;
+  timezone: string;
+  items: (CalendarEvent & { source: 'course' | 'event' | 'deadline'; lessonId?: number })[];
+  coverage: { courseSyncedAt: string | null; complete: boolean; warnings: string[] };
+}
+
 export interface TimetableApi {
+  onUpdate(listener: () => void): () => void;
+  querySchedule(input: {
+    startAt: string;
+    endAt: string;
+    semester?: string;
+  }): Promise<ScheduleResult>;
+  updateEvent(id: number, input: CalendarEventInput): Promise<CalendarEvent>;
   getState(semester?: string): Promise<TimetableState>;
   connect(): Promise<TimetableResult>;
   disconnect(): Promise<TimetableResult>;

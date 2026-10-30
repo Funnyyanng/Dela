@@ -31,7 +31,7 @@ it('keeps a Canvas assignment concrete even when its files are not locally regis
   expect(prompt).toContain('"courseId":23,"assignmentId":42');
   expect(prompt).toContain('"dueAt":null');
   expect(prompt).toContain('query_assignments');
-  expect(prompt).toContain('refresh_canvas_course');
+  expect(prompt).toContain('assignmentIds: [assignmentId]');
   expect(prompt).toContain('sync_local_canvas');
   expect(prompt).toContain('已经提交、已批改或豁免时跳过');
   expect(prompt).toContain('不要提交到 Canvas');

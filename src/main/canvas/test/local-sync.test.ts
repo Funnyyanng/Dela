@@ -27,6 +27,7 @@ vi.mock('../api', () => ({
   getCanvasState: vi.fn(),
   syncCanvasCourses: vi.fn(),
   syncCanvasCourse: vi.fn(),
+  syncCanvasAssignment: vi.fn(),
   getSource: vi.fn(),
   cachedFile: vi.fn(),
   getCanvasQuizzes: vi.fn(),
@@ -42,6 +43,7 @@ import {
   getCanvasState,
   getSource,
   syncCanvasCourse,
+  syncCanvasAssignment,
   syncCanvasCourses,
 } from '../api';
 import { boundCanvasFile } from '../local-bindings';
@@ -206,6 +208,9 @@ beforeEach(() => {
   vi.mocked(getCanvasState).mockImplementation(() => state);
   vi.mocked(syncCanvasCourses).mockImplementation(async () => state);
   vi.mocked(syncCanvasCourse).mockImplementation(async () => state);
+  vi.mocked(syncCanvasAssignment).mockImplementation(async (_courseId, id) =>
+    sources.get(`assignment:${id}`)!,
+  );
   vi.mocked(getSource).mockImplementation((id) => {
     const source = sources.get(id);
     if (!source) throw new Error(`未设置测试资料 ${id}`);
@@ -802,5 +807,58 @@ describe('Canvas 本地课程目录同步', () => {
     expect(overview).not.toContain(test.title);
     expect(overview).not.toContain('2026-11-13 02:00（北京时间）');
     expect(readFileSync(join(root, 'Canvas测试总览.md'), 'utf8')).toBe(previousOverview);
+  });
+});
+
+describe('精准同步范围', () => {
+  it('只更新指定作业原题和附件，保留其他课程、答案及总览，不推进全量时间', async () => {
+    state.courses.push({ ...state.courses[0]!, id: 2, name: '其他课程' });
+    configureLocalCanvasSync(root, [1, 2]);
+    putAssignment(71, '第一次作业', '<p>题目 <a href="/courses/1/files/90/download">附件</a></p>');
+    putAssignment(72, '第二次作业', '<p>其他题目</p>');
+    putFile('附件.pdf', '题目附件', 90);
+    putFile('课件.pdf', '无关课件', 91);
+    const answer = localFile(
+      join(courseDirectory, '作业', `${courseName}-第一次作业`, '我的答案.md'),
+      '保留用户答案',
+    );
+    const overview = localFile(join(root, 'Canvas测试总览.md'), '原有全量总览');
+    const other = localFile(join(root, '其他课程', '课件', '资料.txt'), '其他课程原件');
+    const result = await syncLocalCanvas({ courseId: 1, assignmentIds: [71] });
+    expect(result).toMatchObject({
+      added: 2,
+      failed: [],
+      scope: { courseIds: [1], assignmentIds: [71], completeLibrary: false },
+    });
+    expect(syncCanvasAssignment).toHaveBeenCalledExactlyOnceWith(1, 71);
+    expect(syncCanvasCourses).not.toHaveBeenCalled();
+    expect(syncCanvasCourse).not.toHaveBeenCalled();
+    expect(getCanvasQuizzes).not.toHaveBeenCalled();
+    expect(cachedFile).toHaveBeenCalledTimes(1);
+    expect(readFileSync(answer, 'utf8')).toBe('保留用户答案');
+    expect(readFileSync(overview, 'utf8')).toBe('原有全量总览');
+    expect(readFileSync(other, 'utf8')).toBe('其他课程原件');
+    expect(getLocalCanvasSyncState()?.syncedAt).toBeNull();
+    expect(existsSync(join(courseDirectory, '作业', `${courseName}-第二次作业`))).toBe(false);
+    expect(
+      readFileSync(
+        join(courseDirectory, '作业', `${courseName}-第一次作业`, 'Canvas作业说明.html'),
+        'utf8',
+      ),
+    ).toContain('题目');
+  });
+  it('指定课程不会刷新其他课程；单作业失败不沿用旧原题冒充成功', async () => {
+    state.courses.push({ ...state.courses[0]!, id: 2, name: '其他课程' });
+    configureLocalCanvasSync(root, [1, 2]);
+    await syncLocalCanvas({ courseId: 1 });
+    expect(syncCanvasCourse).toHaveBeenCalledExactlyOnceWith(1);
+    expect(syncCanvasCourses).not.toHaveBeenCalled();
+    expect(getLocalCanvasSyncState()?.syncedAt).toBeNull();
+    putAssignment(71, '旧题', '<p>旧题</p>');
+    vi.mocked(syncCanvasAssignment).mockRejectedValueOnce(new Error('未能获取当前原题'));
+    const failed = await syncLocalCanvas({ courseId: 1, assignmentIds: [71] });
+    expect(failed.failed).toEqual([`${courseName}/作业 71：未能获取当前原题`]);
+    expect(failed.added).toBe(0);
+    expect(existsSync(join(courseDirectory, '作业', `${courseName}-旧题`))).toBe(false);
   });
 });

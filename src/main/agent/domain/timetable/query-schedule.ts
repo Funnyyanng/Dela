@@ -59,7 +59,7 @@ function shanghaiDayToUtc(date: string, edge: 'start' | 'end'): string {
 }
 
 export const queryScheduleTool = tool(
-  '查询时间范围内的课程与个人事件（只读本地缓存，按 Asia/Shanghai 展开周次）。优先传 startDate/endDate（YYYY-MM-DD，按上海时区解释为当日全天）；也可传 startAt/endAt（UTC ISO 8601）。semester 可选（格式 YYYY-YYYY-[123]），缺省按本机时钟取当前学期。学期未同步或缺学期开始日期时 coverage 带警告；课程与个人事件以 source 字段区分。',
+  '查询时间范围内的课程、个人事件与待办截止时间（只读本地缓存，按 Asia/Shanghai 展开周次）。优先传 startDate/endDate（YYYY-MM-DD，按上海时区解释为当日全天）；也可传 startAt/endAt（UTC ISO 8601）。semester 可选（格式 YYYY-YYYY-[123]），缺省按本机时钟取当前学期。学期未同步或缺学期开始日期时 coverage 带警告；课程、个人事件、截止日期以 source 字段区分；deadline 起止相同，不代表占用工作时间。',
   queryScheduleInput,
   (input) => {
     const startAt =

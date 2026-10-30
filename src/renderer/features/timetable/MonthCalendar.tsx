@@ -17,6 +17,7 @@ import {
   weekForDate,
 } from './timetable-format';
 import { menuPanel } from '../../components/ui/menu-styles';
+import type { CalendarItemDetail } from './WeekCalendar';
 import { cn } from '../../lib/utils';
 
 export function MonthCalendar({
@@ -25,6 +26,7 @@ export function MonthCalendar({
   month,
   semesterStart,
   onCreate,
+  onOpen,
   onEditSemesterStart,
 }: {
   events: readonly CalendarEvent[];
@@ -32,6 +34,7 @@ export function MonthCalendar({
   month: Date;
   semesterStart: string | null;
   onCreate: (start: Date, end?: Date) => void;
+  onOpen?: (detail: CalendarItemDetail) => void;
   onEditSemesterStart: () => void;
 }) {
   const first = mondayOf(new Date(month.getFullYear(), month.getMonth(), 1));
@@ -107,12 +110,14 @@ export function MonthCalendar({
                     formatTime(new Date(event.todoId ? event.endAt : event.startAt))
                   : null,
               tone: eventTone(event.color),
+              detail: { kind: event.todoId ? 'todo' : 'event', event } as CalendarItemDetail,
             })),
             ...dayLessons.map((lesson) => ({
               id: `lesson-${lesson.id}`,
               title: lesson.courseName,
               time: lesson.periodsText,
               tone: eventColorStyle(colorFor(lesson.courseCode || lesson.courseName)),
+              detail: { kind: 'lesson', lesson, date } as CalendarItemDetail,
             })),
           ];
           // 拖拽可以跨到补位的相邻日期创建，但只有当月日期参与高亮。
@@ -165,7 +170,13 @@ export function MonthCalendar({
                 {items.slice(0, 3).map((item) => (
                   // 容器不足 320px 时课程条压成色点：格子只留日号与标记点，完整信息看「更多」弹层。
                   // 注意点样式写在课程条自身（查询外层月历容器），内部文字交给条上的 overflow 裁掉。
-                  <span
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpen?.(item.detail);
+                    }}
                     className="@container flex h-5 min-w-0 items-center gap-1 rounded px-1.5 text-2xs @max-[320px]:h-2 @max-[320px]:w-2 @max-[320px]:rounded-full @max-[320px]:overflow-hidden @max-[320px]:p-0"
                     key={item.id}
                     style={item.tone}
@@ -179,7 +190,7 @@ export function MonthCalendar({
                     <span className="truncate font-medium" title={item.title}>
                       {item.title}
                     </span>
-                  </span>
+                  </button>
                 ))}
                 {items.length > 3 ? (
                   <Popover.Root>
@@ -210,14 +221,20 @@ export function MonthCalendar({
                               key={item.id}
                               style={item.tone}
                             >
-                              {item.time ? (
-                                <span className="shrink-0 tabular-nums opacity-70">
-                                  {item.time}
+                              <button
+                                type="button"
+                                className="flex min-w-0 w-full items-center gap-1.5 text-left"
+                                onClick={() => onOpen?.(item.detail)}
+                              >
+                                {item.time ? (
+                                  <span className="shrink-0 tabular-nums opacity-70">
+                                    {item.time}
+                                  </span>
+                                ) : null}
+                                <span className="truncate font-medium" title={item.title}>
+                                  {item.title}
                                 </span>
-                              ) : null}
-                              <span className="truncate font-medium" title={item.title}>
-                                {item.title}
-                              </span>
+                              </button>
                             </li>
                           ))}
                         </ul>

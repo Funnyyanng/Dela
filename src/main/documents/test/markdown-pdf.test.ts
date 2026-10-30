@@ -36,6 +36,9 @@ vi.mock('electron', async () => {
         super();
         state.windows.push(this);
       }
+      static getAllWindows() {
+        return [{ isDestroyed: () => false, webContents: owner }];
+      }
       static fromWebContents() {
         return null;
       }
@@ -58,7 +61,12 @@ vi.mock('../../workspace/api', () => ({
 }));
 
 import { readWorkspaceEntry, workspaceFilePath } from '../../workspace/api';
-import { exportMarkdownPdf, markdownPdfDocument, markdownPdfReady } from '../markdown-pdf';
+import {
+  exportMarkdownPdf,
+  exportSavedMarkdownPdf,
+  markdownPdfDocument,
+  markdownPdfReady,
+} from '../markdown-pdf';
 
 let directory: string;
 let source: string;
@@ -204,4 +212,21 @@ it.each(['load', 'ready'])('%s 无响应在 45 秒后终止并清理', async (ph
   expect(state.print).not.toHaveBeenCalled();
   expect(readdirSync(directory)).toEqual(['笔记.md']);
   expect(() => markdownPdfDocument(state.windows[0]!.webContents.id)).toThrow('没有');
+});
+
+it('one-click export renders saved text without a dialog and refuses to replace an existing answer', async () => {
+  let snapshot: MarkdownPdfDocument | undefined;
+  state.load.mockImplementation(async (window: TestWindow) => {
+    snapshot = markdownPdfDocument(window.webContents.id);
+    markdownPdfReady(window.webContents.id, null);
+  });
+  await expect(exportSavedMarkdownPdf(source)).resolves.toBe(target);
+  expect(snapshot?.text).toBe('# 已保存的笔记');
+  expect(state.showSaveDialog).not.toHaveBeenCalled();
+  await expect(exportSavedMarkdownPdf(source)).rejects.toThrow('此 PDF 已存在');
+  expect(readFileSync(target, 'utf8')).toBe('%PDF-1.7\nmarkdown');
+  await expect(exportSavedMarkdownPdf(source, '../elsewhere.pdf')).rejects.toThrow('当前目录');
+  await expect(exportSavedMarkdownPdf(source, '笔记-修订.pdf')).resolves.toBe(
+    join(directory, '笔记-修订.pdf'),
+  );
 });

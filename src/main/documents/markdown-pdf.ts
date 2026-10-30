@@ -1,5 +1,7 @@
 import { BrowserWindow, dialog, type WebContents } from 'electron';
 import { writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { isWorkspaceWindow } from '../notifications/system';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import type { MarkdownPdfDocument } from '../../shared/workspace';
 import { readWorkspaceEntry, workspaceFilePath } from '../workspace/api';
@@ -44,7 +46,41 @@ export async function exportMarkdownPdf(
   if (resolve(output) === resolve(sourcePath))
     throw new Error('PDF 不能覆盖 Markdown 源文件，请选择其他位置');
 
-  const url = new URL(sender.getURL());
+  return renderMarkdownPdf(sender.getURL(), { entryId, title: source.title, text }, output);
+}
+
+export async function exportSavedMarkdownPdf(
+  entryId: string,
+  outputName?: string,
+): Promise<string> {
+  const source = await readWorkspaceEntry(entryId);
+  if (source.format !== 'markdown') throw new Error('只有本地 Markdown 文件可以导出 PDF');
+  const sourcePath = await workspaceFilePath(entryId);
+  const name = outputName ?? `${basename(sourcePath, extname(sourcePath))}.pdf`;
+  if (!name.trim() || basename(name) !== name || /[\\/]/.test(name) || !/\.pdf$/i.test(name))
+    throw new Error('请提供当前目录中的 PDF 文件名');
+  const output = join(dirname(sourcePath), name);
+  if (existsSync(output))
+    throw new Error('此 PDF 已存在；先检查已有成果，需要修改时使用新的修订文件名');
+  const owner = BrowserWindow.getAllWindows().find(
+    (window) => !window.isDestroyed() && isWorkspaceWindow(window.webContents.getURL()),
+  );
+  if (!owner) throw new Error('PDF 导出页面尚未准备好，请打开 Dela 后重试');
+  return renderMarkdownPdf(
+    owner.webContents.getURL(),
+    { entryId, title: source.title, text: source.text ?? '' },
+    output,
+    true,
+  );
+}
+
+async function renderMarkdownPdf(
+  senderUrl: string,
+  document: MarkdownPdfDocument,
+  output: string,
+  exclusive = false,
+): Promise<string> {
+  const url = new URL(senderUrl);
   url.searchParams.set('markdown-pdf', '1');
   const window = new BrowserWindow({
     width: 1000,
@@ -64,7 +100,7 @@ export async function exportMarkdownPdf(
   const ready = new Promise<void>((complete, reject) => {
     fail = reject;
     documents.set(senderId, {
-      document: { entryId, title: source.title, text },
+      document,
       ready: (error) =>
         error === null
           ? complete()
@@ -95,7 +131,7 @@ export async function exportMarkdownPdf(
       }),
     ]);
     if (!pdf.byteLength) throw new Error('Markdown PDF 导出未生成内容，请重试');
-    await writeFile(output, pdf);
+    await writeFile(output, pdf, { flag: exclusive ? 'wx' : 'w' });
     return output;
   } catch (error) {
     throw new Error(`无法导出 Markdown PDF：${error instanceof Error ? error.message : error}`);

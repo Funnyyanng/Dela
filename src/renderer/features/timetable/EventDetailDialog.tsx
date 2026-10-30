@@ -1,3 +1,4 @@
+import { NewEventDialog } from './NewEventDialog';
 import { useState } from 'react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
 import {
@@ -41,6 +42,7 @@ export function EventDetailDialog({
   onDeleted: () => void;
   onOpenTodo?: (todoId: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -74,6 +76,15 @@ export function EventDetailDialog({
     timeText = formatEventRange(detail.event);
   }
 
+  if (editing && detail.kind === 'event')
+    return (
+      <NewEventDialog
+        existing={detail.event}
+        draft={{ start: new Date(detail.event.startAt), end: new Date(detail.event.endAt) }}
+        onClose={() => setEditing(false)}
+        onCreated={onDeleted}
+      />
+    );
   return (
     <DialogPrimitive.Root onOpenChange={(open) => !open && !deleting && onClose()} open>
       <DialogPrimitive.Portal>
@@ -112,7 +123,7 @@ export function EventDetailDialog({
             {detail.kind === 'todo' ? (
               <div className="flex items-start gap-2">
                 <CircleCheckBig className="mt-0.5 size-4 shrink-0 text-ink-3" />
-                <span>来自个人待办的截止时间</span>
+                <span>截止时间，不代表计划工作时段</span>
               </div>
             ) : null}
             {detail.kind !== 'lesson' ? (
@@ -153,6 +164,9 @@ export function EventDetailDialog({
           {/* 底部只保留破坏性操作的确认区；关闭走右上角 X，避免重复入口。 */}
           {detail.kind === 'event' ? (
             <div className="mt-5 flex items-center gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                编辑日程
+              </Button>
               {confirming ? (
                 <>
                   <span className="text-xs text-ink-3">确认删除？</span>

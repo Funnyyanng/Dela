@@ -5,11 +5,15 @@ import { canvas } from './canvas';
 import { cache } from './cache';
 import { chat } from './chat';
 import { consent } from './consent';
+import { context } from './context';
 import { backup } from './backup';
 import { llm } from './llm';
 import { capabilityApi as capability } from './capabilities';
 import { layout } from './layout';
 import { learning } from './learning';
+import { jobs } from './jobs';
+import { life } from './life';
+import { projects } from './projects';
 import { mail } from './mail';
 import { notifications } from './notifications';
 import { packages } from './packages';
@@ -39,6 +43,7 @@ contextBridge.exposeInMainWorld('dela', {
   window: windowApi,
   settings,
   consent,
+  context,
   backup,
   cache,
   llm,
@@ -51,6 +56,9 @@ contextBridge.exposeInMainWorld('dela', {
   session,
   layout,
   learning,
+  jobs,
+  life,
+  projects,
   capability,
   packages,
   update,

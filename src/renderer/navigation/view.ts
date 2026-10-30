@@ -12,6 +12,10 @@ import { useSessions } from '../sessions/store';
 import { showToast } from '../app/toasts';
 
 export type AppView =
+  | 'today'
+  | 'jobs'
+  | 'life'
+  | 'projects'
   | 'home'
   | 'workbench'
   | 'mail'
@@ -51,6 +55,8 @@ interface NavigationState {
   forwardStack: NavigationRoute[];
   mailRequest: { messageId: number } | null;
   todoRequest: { id: string } | null;
+  jobRequestId: string | null;
+  lifeRequestDate: string | null;
   /** 每次赋新对象，保证已在设置页时也能触发分区切换。 */
   settingsRequest: { section: SettingsSectionId } | null;
   /** 新建项目弹窗脉冲（导航栏/托盘/快捷键），由工作台装配层转成 EntryDialogs 请求。 */
@@ -78,6 +84,8 @@ interface NavigationState {
   openTerminal(projectId: string): boolean;
   openMail(messageId: number): boolean;
   openTodo(id: string): boolean;
+  openJob(id: string): boolean;
+  openLife(date?: string): boolean;
   openSettings(section?: SettingsSectionId): boolean;
   openShuiyuanTopic(topicId: number, postNumber?: number): void;
   /** 新建项目弹窗（先回到工作台）。 */
@@ -136,17 +144,30 @@ export const useNavigationStore = create<NavigationState>((set, get) => {
     return true;
   };
   return {
-    view: 'home',
+    view: 'today',
     projectId: null,
     backStack: [],
     forwardStack: [],
     mailRequest: null,
     todoRequest: null,
+    jobRequestId: null,
+    lifeRequestDate: null,
     settingsRequest: null,
     createProject: false,
     reveal: null,
     generalChat: null,
     lastHomeSessionId: null,
+
+    openLife: (date) => {
+      if (!get().navigate('life')) return false;
+      set({ lifeRequestDate: date ?? null });
+      return true;
+    },
+    openJob: (id) => {
+      if (!get().navigate('jobs')) return false;
+      set({ jobRequestId: id });
+      return true;
+    },
 
     navigate: (next) => {
       const state = get();

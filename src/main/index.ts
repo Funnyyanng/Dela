@@ -1,10 +1,26 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  powerMonitor,
+  shell,
+  Tray,
+} from 'electron';
 import { registerTodoIpc, refreshTodos } from './todo';
 import { registerLearningIpc } from './learning/ipc';
+import { initializeJobs, registerJobsIpc, shutdownJobs, cancelJobsShutdown } from './jobs';
+import { registerLifeIpc, dueLifeReminders, markLifeReminderNotified } from './life';
+import { registerProjectsIpc } from './projects/ipc';
+import { registerContextIpc } from './context';
 import { registerBackupIpc } from './backup';
+import { initializeUserDataProfile } from './backup-profile';
 import { registerCacheIpc } from './cache';
 import { registerConsentIpc } from './consent';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { closeDatabase, getDatabase } from './database';
@@ -28,6 +44,7 @@ import { registerRemoteIpc } from './remotes/ipc';
 import { registerSearchIpc } from './search';
 import {
   initializeNotifications,
+  publishLocalNotification,
   registerNotificationsIpc,
   refreshNotifications,
 } from './notifications';
@@ -50,6 +67,7 @@ import { spawn as spawnPty } from 'node-pty';
 
 const terminalSmokeTest = process.argv.includes('--terminal-smoke-test');
 const smokeTest = process.argv.includes('--smoke-test') || terminalSmokeTest;
+if (!smokeTest) initializeUserDataProfile();
 let startHidden = process.argv.includes('--hidden');
 if (smokeTest && !terminalSmokeTest) {
   const profile = mkdtempSync(join(tmpdir(), 'dela-smoke-'));
@@ -110,6 +128,8 @@ let stopUpdateCheck: (() => void) | undefined;
 let tray: Tray | undefined;
 let mainWindow: BrowserWindow | undefined;
 let quitting = false;
+let pendingJobCount = 0;
+let reminderTimer: ReturnType<typeof setInterval> | undefined;
 
 // 托盘「退出」与引导条款页的「不同意并退出」共用：置位后 close 处理器不再拦成隐藏。
 function quitApp() {
@@ -205,8 +225,38 @@ app
     registerNotificationsIpc();
     registerTodoIpc();
     registerLearningIpc();
+    registerJobsIpc();
+    registerLifeIpc();
+    registerProjectsIpc();
+    registerContextIpc(invalidateSessions);
     registerUpdateIpc();
     initializeNotifications();
+    initializeJobs({
+      onChange: ({ jobs }) => {
+        const count = jobs.filter((job) =>
+          ['queued', 'running', 'needs_input', 'interrupted'].includes(job.status),
+        ).length;
+        if (count !== pendingJobCount) {
+          pendingJobCount = count;
+          refreshTrayMenu();
+        }
+      },
+      onTerminal: (job) =>
+        publishLocalNotification({
+          id: `jobs:${job.id}:${job.finishedAt}`,
+          source: 'jobs',
+          title:
+            job.status === 'needs_input'
+              ? '任务需要你补充'
+              : job.status === 'failed'
+                ? '任务未能完成'
+                : '任务处理结束',
+          body: `${job.title} · ${job.question || job.error || job.stage}`,
+          createdAt: new Date(job.finishedAt ?? job.updatedAt).toISOString(),
+          readAt: null,
+          href: { kind: 'job', jobId: job.id },
+        }),
+    });
     // 回收未被任何会话引用的内联图片（上次运行遗留的草稿图片等）。
     gcChatMedia();
     if (!smokeTest) {
@@ -230,6 +280,52 @@ app
           console.error('Canvas tree sync failed', error),
         );
       };
+      const remind = () => {
+        try {
+          const items = dueLifeReminders();
+          if (!items.length) return;
+          const first = items[0]!;
+          publishLocalNotification({
+            id: `life:${createHash('sha256')
+              .update(
+                items
+                  .map((item) => item.id)
+                  .sort()
+                  .join('\n'),
+              )
+              .digest('hex')}`,
+            source: 'life',
+            title: items.length === 1 ? first.title : `${items.length} 项到期提醒`,
+            body:
+              items.length === 1
+                ? first.body
+                : items
+                    .slice(0, 5)
+                    .map((item) => item.title)
+                    .join('、'),
+            createdAt: new Date().toISOString(),
+            readAt: null,
+            href:
+              items.length === 1 && !first.id.startsWith('occurrence:')
+                ? { kind: 'todo', todoId: first.todoId }
+                : {
+                    kind: 'life',
+                    date: first.id.startsWith('occurrence:')
+                      ? first.id.match(/\d{4}-\d{2}-\d{2}/)?.[0]
+                      : undefined,
+                  },
+          });
+          for (const item of items) markLifeReminderNotified(item.id);
+        } catch (error) {
+          console.error('Reminder check failed', error);
+        }
+      };
+      remind();
+      reminderTimer = setInterval(remind, 60_000);
+      powerMonitor.on('resume', () => {
+        remind();
+        syncTodos();
+      });
       syncTodos();
       todoTimer = setInterval(syncTodos, TODO_REFRESH_MS);
       refresh();
@@ -314,6 +410,7 @@ async function createWindow(): Promise<void> {
   window.webContents.on('will-prevent-unload', (event) => {
     const wasQuitting = quitting;
     quitting = false;
+    cancelJobsShutdown();
     if (hasMailComposer(window.webContents.id)) {
       window.webContents.send('mail:request-close', wasQuitting);
       return;
@@ -328,6 +425,7 @@ async function createWindow(): Promise<void> {
     });
     if (choice === 0) {
       quitting = wasQuitting;
+      if (wasQuitting) shutdownJobs();
       event.preventDefault();
     }
   });
@@ -430,33 +528,32 @@ function createTray(window: BrowserWindow): void {
     .createFromPath(join(app.getAppPath(), 'assets', `Dela_${savedIcon()}_bg.png`))
     .resize({ width: 16, height: 16 });
   tray = new Tray(icon);
-  tray.setToolTip('Dela');
+  refreshTrayMenu();
+  tray.on('click', () => showMainWindow(window));
+}
+
+function refreshTrayMenu(): void {
+  if (!tray || !mainWindow || mainWindow.isDestroyed()) return;
+  const window = mainWindow;
+  const action = (value: TrayAction) => () => {
+    showMainWindow(window);
+    window.webContents.send('window:tray-action', value);
+  };
+  tray.setToolTip(pendingJobCount ? `Dela · ${pendingJobCount} 项任务` : 'Dela');
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '打开主窗口', click: () => showMainWindow(window) },
-      { type: 'separator' },
+      { label: '今天', click: action('open-today') },
       {
-        label: '新建对话',
-        click: () => {
-          showMainWindow(window);
-          window.webContents.send('window:tray-action', 'new-chat');
-        },
-      },
-      {
-        label: '新建项目',
-        click: () => {
-          showMainWindow(window);
-          window.webContents.send('window:tray-action', 'new-project');
-        },
+        label: `任务中心${pendingJobCount ? `（${pendingJobCount}）` : ''}`,
+        click: action('open-jobs'),
       },
       { type: 'separator' },
-      {
-        label: '退出',
-        click: quitApp,
-      },
+      { label: '新建对话', click: action('new-chat') },
+      { label: '新建项目', click: action('new-project') },
+      { type: 'separator' },
+      { label: '退出 Dela', click: quitApp },
     ]),
   );
-  tray.on('click', () => showMainWindow(window));
 }
 
 app
@@ -475,6 +572,7 @@ app.on('window-all-closed', () => {
 let sessionsClosed = false;
 app.on('before-quit', (event) => {
   quitting = true;
+  shutdownJobs();
   if (!sessionsClosed && hasLiveSessions()) {
     event.preventDefault();
     sessionsClosed = true;
@@ -488,6 +586,7 @@ app.on('will-quit', () => {
   clearInterval(notificationTimer);
   clearInterval(mailTimer);
   clearInterval(canvasTimer);
+  clearInterval(reminderTimer);
   stopUpdateCheck?.();
   // 远端 helper 不等我们说再见：它靠心跳消失后自己退出（最多 5 分钟），这里只关本地隧道。
   // watch 的事件流要先收掉，否则它会在退出过程中试图把通道重新建起来。

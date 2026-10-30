@@ -1,176 +1,256 @@
-// 导出本机数据的回归：断言落在磁盘上真实存在（或不存在）什么，而不是「某个函数被调用了」。
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  copyFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
-  root: '',
-  documents: '',
-  home: '',
-  picked: { canceled: false, filePaths: [] as string[] },
-  failOn: '',
+  paths: {} as Record<string, string>,
+  skills: '',
+  projects: [] as unknown[],
+  relaunch: vi.fn(),
+  quit: vi.fn(),
 }));
-
 vi.mock('electron', () => ({
   app: {
-    getPath: (name: string) => {
-      if (name === 'documents') return state.documents;
-      if (name === 'home') return state.home;
-      return state.root;
+    getPath: (key: string) => state.paths[key],
+    setPath: (key: string, value: string) => {
+      state.paths[key] = value;
     },
-    getVersion: () => '1.1.0',
-    isPackaged: false,
+    relaunch: state.relaunch,
+    quit: state.quit,
   },
-  ipcMain: { handle: () => undefined },
-  dialog: { showOpenDialog: async () => state.picked },
-  BrowserWindow: { fromWebContents: () => null },
+  BrowserWindow: {},
+  dialog: {},
+  ipcMain: {},
 }));
-
-// cp 照常工作，只对指定条目的源路径抛错，用来验证「一个条目失败不影响其余条目」。
-vi.mock('node:fs/promises', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs/promises')>();
+vi.mock('better-sqlite3', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
   return {
-    ...actual,
-    cp: async (
-      source: Parameters<typeof actual.cp>[0],
-      target: Parameters<typeof actual.cp>[1],
-      options?: Parameters<typeof actual.cp>[2],
-    ) => {
-      if (state.failOn && String(source).includes(state.failOn)) throw new Error('EBUSY');
-      return actual.cp(source, target, options);
+    default: class {
+      db: DatabaseSync;
+      constructor(path: string, options?: { readonly?: boolean }) {
+        this.db = new DatabaseSync(path, { readOnly: options?.readonly });
+      }
+      prepare(sql: string) {
+        return this.db.prepare(sql);
+      }
+      exec(sql: string) {
+        return this.db.exec(sql);
+      }
+      pragma(sql: string, options?: { simple?: boolean }) {
+        const rows = this.db.prepare(`PRAGMA ${sql}`).all();
+        return options?.simple ? Object.values(rows[0] ?? {})[0] : rows;
+      }
+      transaction(fn: () => void) {
+        return () => {
+          this.db.exec('BEGIN');
+          try {
+            fn();
+            this.db.exec('COMMIT');
+          } catch (cause) {
+            this.db.exec('ROLLBACK');
+            throw cause;
+          }
+        };
+      }
+      close() {
+        this.db.close();
+      }
     },
   };
 });
-
-import type { BackupResult } from '../../shared/backup';
-import { exportUserData } from '../backup';
-import { closeDatabase, getDatabase } from '../database';
-
-let base: string;
-let userData: string;
-let pickedDirectory: string;
-
-function exported(result: BackupResult): Extract<BackupResult, { status: 'exported' }> {
-  if (result.status !== 'exported') throw new Error('这一步应当导出成功');
-  return result;
-}
-
+vi.mock('../database', () => ({ getDatabase: vi.fn(), SCHEMA_VERSION: 6 }));
+vi.mock('../agent/skills', () => ({ builtinSkillsDirectory: () => state.skills }));
+vi.mock('../cache', () => ({ cacheDirectoryNames: new Set(['Cache']) }));
+vi.mock('../projects', () => ({ getProjectsState: () => ({ projects: state.projects }) }));
+import { getDatabase } from '../database';
+import { exportBackupTo, getBackupCoverage, inspectBackupPath, restoreBackupTo } from '../backup';
+import {
+  initializeUserDataProfile,
+  activateUserDataProfile,
+  previousUserDataProfile,
+} from '../backup-profile';
+let root: string;
+let db: DatabaseSync;
+let workspace: string;
+let external: string;
+let target: string;
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), 'dela-backup-'));
-  state.documents = join(base, 'documents');
-  pickedDirectory = join(base, '选定的位置');
-  mkdirSync(pickedDirectory, { recursive: true });
-  state.picked = { canceled: false, filePaths: [pickedDirectory] };
-  state.failOn = '';
-
-  // 一棵有代表性但很小的应用数据目录：顶层与分区里都有可再生缓存，
-  // 也都有必须留下的用户数据（分区里的 Local Storage、pi 的会话正文）。
-  userData = join(base, 'userData');
-  state.root = userData;
-  for (const cache of [
-    join('Cache', 'x'),
-    join('Code Cache', 'y'),
-    join('Partitions', 'dela-campus', 'Code Cache', 'z'),
-  ]) {
-    mkdirSync(join(userData, cache), { recursive: true });
-    writeFileSync(join(userData, cache, 'big.bin'), 're-generable');
-  }
-  mkdirSync(join(userData, 'Partitions', 'dela-campus', 'Local Storage', 'leveldb'), {
-    recursive: true,
-  });
+  root = mkdtempSync(join(tmpdir(), 'dela-backup-'));
+  state.paths = { userData: join(root, 'profile'), appData: root };
+  workspace = join(root, 'workspace');
+  external = join(root, '课程');
+  target = join(root, 'exports');
+  state.skills = join(root, 'skills');
+  for (const path of [state.paths.userData!, workspace, external, target, state.skills])
+    mkdirSync(path);
+  mkdirSync(join(state.paths.userData!, 'pi', 'sessions'), { recursive: true });
+  writeFileSync(join(workspace, '笔记.md'), '原笔记');
+  writeFileSync(join(external, '答案.md'), '独立课程答案');
+  writeFileSync(join(state.skills, 'SKILL.md'), '用户技能');
   writeFileSync(
-    join(userData, 'Partitions', 'dela-campus', 'Local Storage', 'leveldb', 'w.ldb'),
-    'keep',
+    join(state.paths.userData!, 'pi', 'sessions', 'one.jsonl'),
+    JSON.stringify({ cwd: external }),
   );
-  mkdirSync(join(userData, 'pi', 'sessions'), { recursive: true });
-  writeFileSync(join(userData, 'pi', 'sessions', 'a.jsonl'), 'keep');
-  mkdirSync(join(state.documents, 'Dela'), { recursive: true });
-  writeFileSync(join(state.documents, 'Dela', 'note.txt'), 'keep');
-  // 用户自己写的 Skill 在 ~/.dela/skills，不在应用数据目录里，得单独带走。
-  state.home = join(base, 'home');
-  mkdirSync(join(state.home, '.dela', 'skills', 'mine'), { recursive: true });
-  writeFileSync(join(state.home, '.dela', 'skills', 'mine', 'SKILL.md'), 'keep');
+  db = new DatabaseSync(join(state.paths.userData!, 'dela.db'));
+  db.exec(
+    'CREATE TABLE workspace_settings(key TEXT PRIMARY KEY,value TEXT); CREATE TABLE workspace_entries(id TEXT PRIMARY KEY,path TEXT); CREATE TABLE records(id TEXT PRIMARY KEY,data TEXT)',
+  );
+  db.prepare('INSERT INTO workspace_settings VALUES (?,?)').run('directory', workspace);
+  db.prepare('INSERT INTO workspace_settings VALUES (?,?)').run(
+    'skills-disabled-paths',
+    JSON.stringify([join(state.skills, 'SKILL.md')]),
+  );
+  db.prepare('INSERT INTO workspace_entries VALUES (?,?)').run('course-project', external);
+  db.prepare('INSERT INTO records VALUES (?,?)').run(
+    'answer',
+    JSON.stringify({ path: join(external, '答案.md'), status: 'needs_review' }),
+  );
+  vi.mocked(getDatabase).mockReturnValue(db as unknown as ReturnType<typeof getDatabase>);
+  state.projects = [
+    { name: '课程', directory: external, remote: false },
+    { name: '服务器', directory: '/srv/project', remote: true },
+  ];
 });
-
 afterEach(() => {
-  closeDatabase();
-  rmSync(base, { recursive: true, force: true });
+  db.close();
+  rmSync(root, { recursive: true, force: true });
+  vi.clearAllMocks();
 });
 
-it('跳过可再生缓存、保留用户数据，并给数据库取一致快照', async () => {
-  getDatabase()
-    .prepare(
-      `INSERT INTO consent_records (document, revision, app_version, accepted_at)
-       VALUES ('terms', '2026-10-15', '1.1.0', '2026-10-15T09:00:00.000Z')`,
-    )
-    .run();
-  // 前提：写入后 WAL 真的落在磁盘上，否则下面「快照不带 -wal」是白测的。
-  expect(existsSync(join(userData, 'dela.db-wal'))).toBe(true);
-
-  const result = exported(await exportUserData(null));
-  // 文件夹名不能带 Windows 非法字符（时间用 - 而不是 :）。
-  expect(result.path).toMatch(/Dela 备份 \d{4}-\d{2}-\d{2} \d{2}-\d{2}$/);
-  expect(result.skipped).toEqual([]);
-  const data = join(result.path, '应用数据');
-
-  for (const cache of ['Cache', 'Code Cache', join('Partitions', 'dela-campus', 'Code Cache')])
-    expect(existsSync(join(data, cache))).toBe(false);
+it('exports an honest manifest and restores a complete profile to a new location without touching source data', async () => {
+  expect(getBackupCoverage().externalProjects).toHaveLength(2);
+  const backup = await exportBackupTo(target, true);
+  expect(backup.status).toBe('exported');
+  if (backup.status !== 'exported') return;
+  expect(backup.skipped).toEqual([]);
+  const inspection = await inspectBackupPath(backup.path);
+  expect(inspection.canRestore).toBe(true);
+  expect(inspection.sections).toContainEqual({ label: '外部项目：课程', included: true });
+  expect(inspection.sections).toContainEqual({
+    label: '外部项目：服务器（远程）',
+    included: false,
+  });
+  writeFileSync(join(workspace, '笔记.md'), '恢复前的新笔记');
+  const restored = await restoreBackupTo(backup.path, inspection.manifestHash, target);
+  expect(existsSync(join(restored.previousSnapshot, '备份清单.json'))).toBe(true);
+  expect(readFileSync(join(workspace, '笔记.md'), 'utf8')).toBe('恢复前的新笔记');
+  expect(readFileSync(join(external, '答案.md'), 'utf8')).toBe('独立课程答案');
+  expect(readFileSync(join(restored.path, '工作目录', '笔记.md'), 'utf8')).toBe('原笔记');
+  const restoredDb = new DatabaseSync(join(restored.profilePath, 'dela.db'));
+  const coursePath = (
+    restoredDb.prepare('SELECT path FROM workspace_entries').get() as { path: string }
+  ).path;
+  expect(coursePath).toBe(join(restored.path, '外部项目', '1'));
+  expect(readFileSync(join(coursePath, '答案.md'), 'utf8')).toBe('独立课程答案');
   expect(
-    existsSync(join(data, 'Partitions', 'dela-campus', 'Local Storage', 'leveldb', 'w.ldb')),
-  ).toBe(true);
-  expect(existsSync(join(data, 'pi', 'sessions', 'a.jsonl'))).toBe(true);
-  expect(existsSync(join(result.path, '工作目录', 'note.txt'))).toBe(true);
-  expect(existsSync(join(result.path, '技能', 'mine', 'SKILL.md'))).toBe(true);
-
-  expect(existsSync(join(data, 'dela.db-wal'))).toBe(false);
-  expect(existsSync(join(data, 'dela.db-shm'))).toBe(false);
-  const snapshot = new Database(join(data, 'dela.db'), { readonly: true });
-  try {
-    expect(snapshot.pragma('user_version', { simple: true })).toBe(6);
-    expect(snapshot.prepare('SELECT COUNT(*) AS count FROM consent_records').get()).toEqual({
-      count: 1,
-    });
-  } finally {
-    snapshot.close();
-  }
+    JSON.parse((restoredDb.prepare('SELECT data FROM records').get() as { data: string }).data),
+  ).toEqual({ path: join(coursePath, '答案.md'), status: 'needs_review' });
+  expect(
+    restoredDb.prepare("SELECT value FROM workspace_settings WHERE key='directory'").get()?.value,
+  ).toBe(join(restored.path, '工作目录'));
+  expect(
+    JSON.parse(
+      restoredDb
+        .prepare("SELECT value FROM workspace_settings WHERE key='skills-disabled-paths'")
+        .get()!.value as string,
+    ),
+  ).toEqual([join(restored.profilePath, 'restored-skills', 'SKILL.md')]);
+  restoredDb.close();
+  expect(
+    JSON.parse(readFileSync(join(restored.profilePath, 'pi', 'sessions', 'one.jsonl'), 'utf8')).cwd,
+  ).toBe(coursePath);
+  expect(readFileSync(join(restored.profilePath, 'restored-skills', 'SKILL.md'), 'utf8')).toBe(
+    '用户技能',
+  );
+  const previous = state.paths.userData;
+  activateUserDataProfile(restored.profilePath);
+  expect(state.relaunch).toHaveBeenCalledOnce();
+  initializeUserDataProfile();
+  expect(state.paths.userData).toBe(restored.profilePath);
+  expect(previousUserDataProfile()).toBe(previous);
 });
 
-it('用户取消时不生成任何东西', async () => {
-  state.picked = { canceled: true, filePaths: [] };
-
-  expect(await exportUserData(null)).toEqual({ status: 'cancelled' });
-  expect(readdirSync(pickedDirectory)).toEqual([]);
+it('excludes external folders by default and preserves their original links during restore', async () => {
+  const backup = await exportBackupTo(target);
+  if (backup.status !== 'exported') throw new Error('export failed');
+  const inspection = await inspectBackupPath(backup.path);
+  expect(inspection.sections).toContainEqual({ label: '外部项目：课程', included: false });
+  const restored = await restoreBackupTo(backup.path, inspection.manifestHash, target);
+  const restoredDb = new DatabaseSync(join(restored.profilePath, 'dela.db'));
+  expect(restoredDb.prepare('SELECT path FROM workspace_entries').get()?.path).toBe(external);
+  restoredDb.close();
+  expect(restored.warnings.some((item) => item.includes('课程'))).toBe(true);
 });
 
-it('同一分钟重复导出不覆盖已有备份', async () => {
-  const first = exported(await exportUserData(null));
-  const second = exported(await exportUserData(null));
-
-  expect(second.path).not.toBe(first.path);
-  expect(existsSync(join(first.path, '应用数据', 'dela.db'))).toBe(true);
-  expect(existsSync(join(second.path, '应用数据', 'dela.db'))).toBe(true);
+it('rejects changed files and nested destinations before restoration, keeping live data intact', async () => {
+  expect((await exportBackupTo(external)).status).toBe('failed');
+  const backup = await exportBackupTo(target);
+  if (backup.status !== 'exported') throw new Error('export failed');
+  const inspection = await inspectBackupPath(backup.path);
+  writeFileSync(join(backup.path, '工作目录', '笔记.md'), '被修改');
+  expect((await inspectBackupPath(backup.path)).canRestore).toBe(false);
+  await expect(restoreBackupTo(backup.path, inspection.manifestHash, target)).rejects.toThrow(
+    '校验未通过',
+  );
+  expect(readFileSync(join(workspace, '笔记.md'), 'utf8')).toBe('原笔记');
 });
 
-it('目标落在数据目录里面时直接拒绝，不在源目录里建备份文件夹', async () => {
-  // 导出的源就是这个目录，写进它自己会让复制边写边读自己。
-  state.picked = { canceled: false, filePaths: [userData] };
-
-  const result = await exportUserData(null);
-
-  expect(result).toMatchObject({ status: 'failed', reason: expect.stringContaining('数据目录') });
-  // 读工作目录设置本身要开库（dela.db 因此出现在 userData 里），但导出不该往里写备份。
-  expect(readdirSync(userData).filter((name) => name.startsWith('Dela 备份'))).toEqual([]);
+it('preserves paths of adjacent directories sharing the same name prefix', async () => {
+  const adjacent = `${external}-其他`;
+  db.prepare('INSERT INTO records VALUES (?,?)').run(
+    'adjacent',
+    JSON.stringify({ path: join(adjacent, '答案.md') }),
+  );
+  const backup = await exportBackupTo(target, true);
+  if (backup.status !== 'exported') throw new Error('export failed');
+  const inspection = await inspectBackupPath(backup.path);
+  const restored = await restoreBackupTo(backup.path, inspection.manifestHash, target);
+  const restoredDb = new DatabaseSync(join(restored.profilePath, 'dela.db'));
+  expect(
+    JSON.parse(
+      (restoredDb.prepare("SELECT data FROM records WHERE id='adjacent'").get() as { data: string })
+        .data,
+    ).path,
+  ).toBe(join(adjacent, '答案.md'));
+  restoredDb.close();
 });
 
-it('单个条目复制失败不影响其余条目，名字如实回报', async () => {
-  state.failOn = 'Partitions';
-
-  const result = exported(await exportUserData(null));
-
-  expect(result.skipped).toEqual(['Partitions']);
-  expect(existsSync(join(result.path, '应用数据', 'pi', 'sessions', 'a.jsonl'))).toBe(true);
-  expect(existsSync(join(result.path, '应用数据', 'dela.db'))).toBe(true);
-  expect(existsSync(join(result.path, '应用数据', 'Partitions'))).toBe(false);
+it('rejects a backup database from a newer incompatible app before restoration', async () => {
+  db.exec('PRAGMA user_version=999');
+  const backup = await exportBackupTo(target);
+  if (backup.status !== 'exported') throw new Error('export failed');
+  const inspection = await inspectBackupPath(backup.path);
+  expect(inspection.canRestore).toBe(false);
+  expect(inspection.failures.join(' ')).toContain('较新的数据库版本');
+  await expect(restoreBackupTo(backup.path, inspection.manifestHash, target)).rejects.toThrow(
+    '校验未通过',
+  );
 });
+
+it.skipIf(!process.env.DELA_BACKUP_SAMPLE)(
+  'roundtrips a copied real course result and project README while preserving the originals',
+  async () => {
+    const sample = process.env.DELA_BACKUP_SAMPLE!;
+    const courseOriginal = readFileSync(sample);
+    const readmeOriginal = readFileSync(join(process.cwd(), 'README.md'));
+    copyFileSync(sample, join(external, 'EX4.md'));
+    writeFileSync(join(workspace, 'README.md'), readmeOriginal);
+    const backup = await exportBackupTo(target, true);
+    if (backup.status !== 'exported') throw new Error('export failed');
+    const inspection = await inspectBackupPath(backup.path);
+    const restored = await restoreBackupTo(backup.path, inspection.manifestHash, target);
+    expect(readFileSync(join(restored.path, '外部项目', '1', 'EX4.md'))).toEqual(courseOriginal);
+    expect(readFileSync(join(restored.path, '工作目录', 'README.md'))).toEqual(readmeOriginal);
+    expect(readFileSync(sample)).toEqual(courseOriginal);
+    expect(readFileSync(join(process.cwd(), 'README.md'))).toEqual(readmeOriginal);
+  },
+);

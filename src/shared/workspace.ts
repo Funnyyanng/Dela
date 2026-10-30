@@ -62,6 +62,7 @@ export const hiddenWorkspaceNames = new Set([
   '.DS_Store',
   'Thumbs.db',
   '.obsidian',
+  '.dela-acceptance',
 ]);
 
 export function isHiddenWorkspaceName(name: string): boolean {

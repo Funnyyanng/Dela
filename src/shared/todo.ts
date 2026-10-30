@@ -1,4 +1,5 @@
 import type { CalendarEventColor } from './timetable';
+import type { Recurrence } from './life';
 
 export type TodoStatus =
   'pending' | 'completed' | 'submitted' | 'graded' | 'excused' | 'resubmit' | 'offline' | 'unknown';
@@ -50,6 +51,15 @@ export function canvasAssignmentRequirements(
 }
 
 export interface TodoItem {
+  priority?: 'low' | 'normal' | 'high';
+  pinned?: boolean;
+  order?: number;
+  estimateMinutes?: number | null;
+  area?: 'inbox' | 'life' | 'course' | 'project';
+  projectId?: string | null;
+  remindAt?: string | null;
+  recurrence?: Recurrence | null;
+  archived?: boolean;
   id: string;
   source: 'personal' | 'canvas';
   title: string;
@@ -93,6 +103,16 @@ export interface TodoState {
   error: string | null;
 }
 export interface TodoSaveInput {
+  priority?: 'low' | 'normal' | 'high';
+  pinned?: boolean;
+  order?: number;
+  estimateMinutes?: number | null;
+  area?: 'inbox' | 'life' | 'course' | 'project';
+  projectId?: string | null;
+  remindAt?: string | null;
+  recurrence?: Recurrence | null;
+  archived?: boolean;
+  courseId?: number | null;
   id?: string;
   title: string;
   notes?: string;
@@ -153,4 +173,41 @@ export function canvasTodoStatus(assignment: Record<string, unknown>): TodoStatu
   )
     return 'pending';
   return 'unknown';
+}
+
+export function rankTodos(
+  items: TodoItem[],
+  now = new Date(),
+): { item: TodoItem; reason: string }[] {
+  const active = items.filter(
+    (item) => !item.archived && !item.recurrence && !todoCompleted(item.status),
+  );
+  const bucket = (item: TodoItem) =>
+    item.pinned
+      ? 0
+      : item.dueAt && Date.parse(item.dueAt) < now.getTime()
+        ? 1
+        : item.dueAt && Date.parse(item.dueAt) - now.getTime() <= 3 * 86400000
+          ? 2
+          : item.priority === 'high'
+            ? 3
+            : item.priority === 'low'
+              ? 5
+              : 4;
+  return active
+    .sort(
+      (a, b) =>
+        Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
+        (a.order ?? 0) - (b.order ?? 0) ||
+        bucket(a) - bucket(b) ||
+        (a.dueAt ?? 'z').localeCompare(b.dueAt ?? 'z') ||
+        a.createdAt.localeCompare(b.createdAt),
+    )
+    .map((item) => ({
+      item,
+      reason:
+        item.order && !item.pinned
+          ? '手动调整优先级'
+          : ['已置顶', '已逾期', '三天内截止', '重要事项', '待安排', '较低优先级'][bucket(item)]!,
+    }));
 }

@@ -10,7 +10,7 @@ import {
   CodeXml,
   Copy,
   FolderOpen,
-  House,
+  MessageCircle,
   Menu,
   MessageCirclePlus,
   Minus,
@@ -51,6 +51,7 @@ import { dialogOverlay, dialogPanel, drawerFromLeft, fadeIn, overlayFade } from 
 import { chromeIconButton, navIcon, navRow } from '../navigation/nav-styles';
 import { UpdateBadge } from '../features/settings/UpdateBadge';
 import { useVisibleNavEntries } from '../navigation/entries';
+import { useJobs } from '../features/jobs/store';
 
 /** 侧栏文字随折叠状态淡入/淡出,与宽度过渡同步(参照 Chrome 垂直标签页)。 */
 const labelFade = 'transition-opacity duration-200 ease-out';
@@ -277,6 +278,12 @@ export function AppShell({
 
   const navHidden = narrow ? drawer === null : sidebarCollapsed;
   const visibleEntries = useVisibleNavEntries();
+  const jobCount = useJobs(
+    (state) =>
+      state.jobs.filter((job) =>
+        ['queued', 'running', 'needs_input', 'interrupted'].includes(job.status),
+      ).length,
+  );
   /** 「资料」入口高亮：通用池内看文档标签时才算资料（与会话标签互斥）。 */
   const sourcesActive = view === 'workbench' && projectId === null && !activeTabIsChat;
 
@@ -450,13 +457,13 @@ export function AppShell({
             <div className="[-webkit-app-region:no-drag] ml-2 flex h-full items-center gap-1">
               <button
                 aria-current={view === 'home' ? 'page' : undefined}
-                aria-label="首页"
+                aria-label="聊天"
                 className={chromeIconButton}
                 onClick={onOpenGeneralChat}
-                title="首页"
+                title="聊天"
                 type="button"
               >
-                <House className="size-4" strokeWidth={1.8} />
+                <MessageCircle className="size-4" strokeWidth={1.8} />
               </button>
               {visibleEntries.map((item) => {
                 const Icon = item.icon;
@@ -465,15 +472,22 @@ export function AppShell({
                   <button
                     aria-current={active ? 'page' : undefined}
                     aria-label={item.label}
-                    className={chromeIconButton}
+                    className={cn(chromeIconButton, 'relative')}
                     key={item.id}
                     onClick={() =>
                       item.id === 'sources' ? onOpenSources() : onNavigateBusiness(item.id)
                     }
-                    title={item.label}
+                    title={
+                      item.id === 'jobs' && jobCount ? `${item.label}（${jobCount}）` : item.label
+                    }
                     type="button"
                   >
                     <Icon className="size-4" strokeWidth={1.8} />
+                    {item.id === 'jobs' && jobCount > 0 && (
+                      <span className="absolute -right-1 -top-1 rounded-full bg-bui-accent px-1 text-[9px] text-white">
+                        {jobCount > 99 ? '99+' : jobCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -760,7 +774,15 @@ export function AppShell({
           </div>
           <ProjectSessionNav
             activeBusinessId={
-              view === 'mail' || view === 'timetable' || view === 'classroom' || view === 'shuiyuan'
+              view === 'mail' ||
+              view === 'timetable' ||
+              view === 'classroom' ||
+              view === 'shuiyuan' ||
+              view === 'today' ||
+              view === 'jobs' ||
+              view === 'life' ||
+              view === 'projects' ||
+              view === 'learning'
                 ? view
                 : null
             }

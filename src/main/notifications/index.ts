@@ -26,6 +26,8 @@ const filterSchema = z.union([
   z.literal('mail'),
   z.literal('shuiyuan'),
   z.literal('todo'),
+  z.literal('jobs'),
+  z.literal('life'),
 ]);
 const snoozeSchema = z.string().datetime().nullable();
 let activeRefresh: Promise<NotificationState> | null = null;
@@ -47,7 +49,11 @@ function currentAccounts(): ActiveAccount[] {
   const db = getDatabase();
   const mail = db.prepare('SELECT address FROM mail_accounts ORDER BY id LIMIT 1').get() as
     { address: string } | undefined;
-  const accounts: ActiveAccount[] = mail ? [{ source: 'mail', key: mail.address }] : [];
+  const accounts: ActiveAccount[] = [
+    { source: 'jobs', key: 'local' },
+    { source: 'life', key: 'local' },
+    ...(mail ? [{ source: 'mail' as const, key: mail.address }] : []),
+  ];
   // 水源关闭：不轮询、不展示已有通知，凭据保留。
   if (!experimentEnabled('shuiyuan')) return accounts;
   try {
@@ -92,6 +98,9 @@ function notificationState(filter: NotificationFilter = 'all'): NotificationStat
       const href = JSON.parse(row.href) as NotificationItem['href'];
       const knownHref =
         (href.kind === 'mail' && typeof href.messageId === 'number') ||
+        (href.kind === 'job' && typeof href.jobId === 'string') ||
+        (href.kind === 'todo' && typeof href.todoId === 'string') ||
+        href.kind === 'life' ||
         (href.kind === 'shuiyuan' && typeof href.topicId === 'number');
       if (!knownHref) return [];
       const readAt =
@@ -173,6 +182,15 @@ function broadcast(): NotificationState {
       window.webContents.send('notifications:state', state);
   }
   return state;
+}
+
+export function publishLocalNotification(item: NotificationItem): void {
+  if (item.source !== 'jobs' && item.source !== 'life') throw new Error('本地通知来源无效');
+  const existing = getDatabase().prepare('SELECT id FROM notifications WHERE id=?').get(item.id);
+  if (existing) return;
+  upsert(item.source, 'local', item.id, item.title, item.body, item.createdAt, item.href);
+  broadcast();
+  systemNotifyItem(item);
 }
 
 function saveRefresh(source: NotificationSource, key: string, error: string | null): void {

@@ -89,6 +89,8 @@ export function useNotifications(active: boolean) {
     const target = item.href;
     const navigation = useNavigationStore.getState();
     if (target.kind === 'todo') navigation.openTodo(target.todoId);
+    else if (target.kind === 'job') navigation.openJob(target.jobId);
+    else if (target.kind === 'life') navigation.openLife(target.date);
     else if (target.kind === 'mail') navigation.openMail(target.messageId);
     else navigation.openShuiyuanTopic(target.topicId, target.postNumber ?? undefined);
     if (!item.readAt && window.dela?.notifications) {

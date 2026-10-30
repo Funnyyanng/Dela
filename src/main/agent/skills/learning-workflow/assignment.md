@@ -2,6 +2,8 @@
 
 ## 明确交付要求
 
+教师指定的格式优先。没有明确格式要求时，默认提供可编辑原稿与 PDF；Markdown 原稿保存后可调用 `export_learning_pdf` 在同目录生成 PDF，不弹出保存对话框、不覆盖已有文件。已有 PDF 先检查内容，确需更新时用新的修订文件名。导出失败保留原稿并明确列为待处理项，不能称已交付完整。
+
 读取实际题目及附件，提取题目、小问、范围、格式、截止时间和明确的评分要求。将每项可核对要求写入 `save_learning_task` 的 requirements，初始 status=draft、要求 status=open。同一作业查询后更新已有 id。
 
 每个要求使用稳定 id，并关联最终的 deliverableIds 和 evidenceIds；成果路径位于课程 `作业/课程-作业名/` 或既有 `大作业/`。保留原题和附件。读取题目时记录 assignmentSourceId 与实际采用的 assignmentSourceVersion；来源版本来自 query_learning_sources，不在交付时静默换成最新版本。材料缺失、相互矛盾或无法读取时明确列为 open，不编造题干、标准答案或评分规则。

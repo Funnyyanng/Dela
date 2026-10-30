@@ -42,6 +42,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         role="alert"
       >
         <p className="text-13 text-ink-3">{this.props.title ?? '此标签遇到错误'}</p>
+        <details className="max-w-lg text-xs text-ink-3">
+          <summary className="cursor-pointer">查看原因</summary>
+          <p className="mt-2 break-words">{error.message}</p>
+        </details>
         <Button size="sm" variant="outline" onClick={this.retry}>
           重试
         </Button>

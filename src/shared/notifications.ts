@@ -1,4 +1,4 @@
-export type NotificationSource = 'mail' | 'shuiyuan' | 'todo';
+export type NotificationSource = 'mail' | 'shuiyuan' | 'todo' | 'jobs' | 'life';
 export type NotificationFilter = 'all' | NotificationSource;
 export interface NotificationItem {
   id: string;
@@ -9,6 +9,8 @@ export interface NotificationItem {
   readAt: string | null;
   href:
     | { kind: 'todo'; todoId: string }
+    | { kind: 'job'; jobId: string }
+    | { kind: 'life'; date?: string }
     | { kind: 'mail'; messageId: number }
     | { kind: 'shuiyuan'; topicId: number; postNumber?: number | null };
 }
@@ -17,9 +19,8 @@ export interface NotificationState {
   totalCount: number;
   unreadCount: number;
   snoozedUntil: string | null;
-  refresh: Record<
-    NotificationSource,
-    { lastSuccessAt: string | null; error: string | null } | null
+  refresh: Partial<
+    Record<NotificationSource, { lastSuccessAt: string | null; error: string | null } | null>
   >;
 }
 export interface NotificationsApi {

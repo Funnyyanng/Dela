@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../credentials', () => ({
@@ -7,6 +8,7 @@ vi.mock('../../database', () => ({ getDatabase: vi.fn() }));
 
 import {
   getCanvasAttachment,
+  syncCanvasAssignment,
   getCanvasQuizzes,
   listTodoCanvasCourses,
   readCanvasPage,
@@ -176,4 +178,66 @@ describe('local course source metadata', () => {
     );
     await expect(getCanvasAttachment(9, 88)).rejects.toThrow('身份不匹配');
   });
+});
+
+it('精准更新一份原题和评分标准，保持课程全量同步时间与其他目录项', async () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(
+    'CREATE TABLE canvas_courses (id INTEGER PRIMARY KEY,data TEXT,items TEXT); CREATE TABLE canvas_sources (id TEXT PRIMARY KEY,course_id INTEGER,data TEXT);',
+  );
+  const oldItem = {
+    id: 'file:9',
+    courseId: 4,
+    parentId: null,
+    sourceId: 'file:9',
+    kind: 'file',
+    name: '课件',
+  };
+  db.prepare('INSERT INTO canvas_courses VALUES (?,?,?)').run(
+    4,
+    JSON.stringify({ syncedAt: 'prior', error: '文件目录失败' }),
+    JSON.stringify([oldItem]),
+  );
+  vi.mocked(getDatabase).mockReturnValue({
+    prepare: (sql: string) => db.prepare(sql),
+    transaction: (work: () => void) => () => work(),
+  } as unknown as ReturnType<typeof getDatabase>);
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        id: 7,
+        course_id: 4,
+        name: '当前题目',
+        description: '<p>当前要求</p>',
+        updated_at: 'now',
+        allowed_extensions: ['pdf'],
+        rubric: [{ description: '步骤', points: 10 }],
+      }),
+    ),
+  );
+  vi.stubGlobal('fetch', fetch);
+  try {
+    const source = await syncCanvasAssignment(4, 7);
+    expect(source).toMatchObject({
+      id: 'assignment:7',
+      courseId: 4,
+      html: '<p>当前要求</p>',
+      updatedAt: 'now',
+      assignmentRequirements: { allowedExtensions: ['pdf'] },
+    });
+    expect(String(fetch.mock.calls[0]![0])).toBe(
+      'https://oc.sjtu.edu.cn/api/v1/courses/4/assignments/7?include[]=submission',
+    );
+    const course = db.prepare('SELECT data,items FROM canvas_courses WHERE id=4').get() as {
+      data: string;
+      items: string;
+    };
+    expect(JSON.parse(course.data)).toEqual({ syncedAt: 'prior', error: '文件目录失败' });
+    expect(JSON.parse(course.items)).toContainEqual(oldItem);
+    expect(JSON.parse(course.items)).toContainEqual(
+      expect.objectContaining({ sourceId: 'assignment:7', name: '当前题目' }),
+    );
+  } finally {
+    db.close();
+  }
 });

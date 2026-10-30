@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { X } from 'lucide-react';
-import type { CalendarEventColor } from '../../../shared/api';
+import type { CalendarEvent, CalendarEventColor } from '../../../shared/api';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { DateTimeStepper } from '../todo/DateTimeStepper';
@@ -14,14 +14,16 @@ const HOUR_MS = 3_600_000;
 
 export function NewEventDialog({
   draft,
+  existing,
   onClose,
   onCreated,
 }: {
   draft: { start: Date; end: Date };
+  existing?: CalendarEvent;
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(existing?.title ?? '');
   const [startAt, setStartAt] = useState(() => roundToMinute(draft.start));
   // 结束默认比开始晚一小时；之后调整开始时整体平移结束，保持时长不变。
   const [endAt, setEndAt] = useState<Date>(() => {
@@ -29,9 +31,9 @@ export function NewEventDialog({
     const end = roundToMinute(draft.end);
     return end.getTime() > start.getTime() ? end : new Date(start.getTime() + HOUR_MS);
   });
-  const [location, setLocation] = useState('');
+  const [location, setLocation] = useState(existing?.location ?? '');
   // 默认石墨中性色，与自动配色的课程区分；选了候选色则随事件保存。
-  const [color, setColor] = useState<CalendarEventColor>('slate');
+  const [color, setColor] = useState<CalendarEventColor>(existing?.color ?? 'slate');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,13 +50,16 @@ export function NewEventDialog({
     setSaving(true);
     setError(null);
     try {
-      await window.dela!.timetable.createEvent({
+      const input = {
         title: title.trim(),
         startAt: startAt.toISOString(),
         endAt: endAt.toISOString(),
         location: location.trim(),
         color,
-      });
+      };
+      if (existing && typeof existing.id === 'number')
+        await window.dela!.timetable.updateEvent(existing.id, input);
+      else await window.dela!.timetable.createEvent(input);
       onCreated();
     } catch (reason) {
       setError(errorText(reason));
@@ -82,7 +87,9 @@ export function NewEventDialog({
         )}
       >
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold tracking-tight">新建事件</h2>
+          <h2 className="text-base font-semibold tracking-tight">
+            {existing ? '编辑日程' : '新建事件'}
+          </h2>
           <Button
             aria-label="关闭"
             className="-mr-2"

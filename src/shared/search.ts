@@ -15,6 +15,7 @@ export type GlobalSearchResult = {
     }
   | { kind: 'mail'; id: number; target: { page: 'mail'; messageId: number } }
   | { kind: 'todo'; id: string; target: { page: 'todo'; todoId: string } }
+  | { kind: 'local-file'; id: string; target: { page: 'local-file'; entryId: string } }
   | { kind: 'course-file'; id: string; target: { page: 'sources'; sourceId: string } }
   | {
       kind: 'setting';
